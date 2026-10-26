@@ -27,8 +27,8 @@ public struct TransitionADALN {
     let transition: Transition
     let scaleOutput: AdaptiveOutputScale
 
-    public init(_ w: Weights) throws {
-        adaln = try AdaptiveLayerNorm(w.scoped("adaln"))
+    public init(_ w: Weights, kind: NormKind) throws {
+        adaln = try AdaptiveLayerNorm(w.scoped("adaln"), kind: kind)
         transition = try Transition(w.scoped("transition"))
         scaleOutput = try AdaptiveOutputScale(w.scoped("scale_output"))
     }
@@ -57,17 +57,17 @@ public struct TrunkLayer {
     let residualTransition: Bool
 
     public init(
-        _ w: Weights, heads: Int, dimHead: Int,
+        _ w: Weights, heads: Int, dimHead: Int, kind: NormKind,
         residualMHA: Bool = true, residualTransition: Bool = true
     ) throws {
-        mhba = try PairBiasAttentionADALN(w.scoped("mhba"), heads: heads, dimHead: dimHead)
-        transition = try TransitionADALN(w.scoped("transition"))
+        mhba = try PairBiasAttentionADALN(w.scoped("mhba"), heads: heads, dimHead: dimHead, kind: kind)
+        transition = try TransitionADALN(w.scoped("transition"), kind: kind)
         self.residualMHA = residualMHA
         self.residualTransition = residualTransition
     }
 
     public func callAsFunction(
-        _ x: MLXArray, pairRep: MLXArray, cond: MLXArray, mask: MLXArray
+        _ x: MLXArray, pairRep: MLXArray?, cond: MLXArray, mask: MLXArray
     ) -> MLXArray {
         let m = mask.expandedDimensions(axis: -1)
         var h = x * m

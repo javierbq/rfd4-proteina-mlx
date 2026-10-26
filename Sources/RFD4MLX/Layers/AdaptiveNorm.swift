@@ -16,17 +16,18 @@ import MLX
 /// so that branch is dead here and is deliberately not ported — porting it would
 /// mean reproducing a reshape no input reaches.
 public struct AdaptiveLayerNorm {
-    let condWeight: MLXArray      // norm_cond.weight
+    /// `elementwise_affine: False` — no weight, hence a bare normalisation.
+    let norm: Norm
+    let normCond: Norm
     let gammaW: MLXArray, gammaB: MLXArray
     let betaW: MLXArray
-    let eps: Float
 
-    public init(_ w: Weights, eps: Float = 1e-5) throws {
-        condWeight = try w("norm_cond.weight")
+    public init(_ w: Weights, kind: NormKind, eps: Float = 1e-5) throws {
+        norm = Norm(w.scoped("norm"), kind: kind, eps: eps)
+        normCond = Norm(w.scoped("norm_cond"), kind: kind, eps: eps)
         gammaW = try w("to_gamma.0.weight")
         gammaB = try w("to_gamma.0.bias")
         betaW = try w("to_beta.weight")
-        self.eps = eps
     }
 
     /// - Parameters:
@@ -34,9 +35,8 @@ public struct AdaptiveLayerNorm {
     ///   - cond: `[b, n, dimCond]`
     ///   - mask: `[b, n]`, float
     public func callAsFunction(_ x: MLXArray, cond: MLXArray, mask: MLXArray) -> MLXArray {
-        // norm has no weight: elementwise_affine=False upstream.
-        let normed = rmsNorm(x, nil, eps: eps)
-        let normedCond = rmsNorm(cond, condWeight, eps: eps)
+        let normed = norm(x)
+        let normedCond = normCond(cond)
         let gamma = MLX.sigmoid(linear(normedCond, gammaW, gammaB))
         let beta = linear(normedCond, betaW)
         return (normed * gamma + beta) * mask.expandedDimensions(axis: -1)

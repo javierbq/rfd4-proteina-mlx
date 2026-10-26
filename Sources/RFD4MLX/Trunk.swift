@@ -66,7 +66,8 @@ public struct Trunk {
         let root = w.scoped("nn")
 
         layers = try (0 ..< Self.layerCount).map {
-            try TrunkLayer(root.scoped("transformer_layers", $0), heads: heads, dimHead: dimHead)
+            try TrunkLayer(root.scoped("transformer_layers", $0),
+                           heads: heads, dimHead: dimHead, kind: .rms)
         }
         pairUpdates = try (0 ..< (Self.layerCount - 1)).map { i -> PairReprUpdate? in
             let scoped = root.scoped("pair_update_layers", i)

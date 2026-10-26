@@ -104,6 +104,39 @@ public func layerNorm(
     return y
 }
 
+/// Which normalisation a module was built with.
+///
+/// `make_norm` is a process-global factory read at construction time, so the same
+/// module class normalises differently depending on when it was built. The released
+/// bundle exercises both: the **flow trunk** uses RMSNorm, the **autoencoder** uses
+/// LayerNorm. Porting either one hard-coded would silently corrupt the other.
+public enum NormKind: Sendable { case rms, layer }
+
+/// A normalisation layer loaded from the checkpoint, of either kind.
+///
+/// `elementwise_affine: False` appears as an absent weight rather than an error,
+/// which is how `AdaptiveLayerNorm.norm` is stored.
+public struct Norm {
+    let kind: NormKind
+    let weight: MLXArray?
+    let bias: MLXArray?
+    let eps: Float
+
+    public init(_ w: Weights, kind: NormKind, eps: Float = 1e-5) {
+        self.kind = kind
+        self.weight = w.optional("weight")
+        self.bias = w.optional("bias")
+        self.eps = eps
+    }
+
+    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+        switch kind {
+        case .rms: rmsNorm(x, weight, eps: eps)
+        case .layer: layerNorm(x, weight, bias, eps: eps)
+        }
+    }
+}
+
 /// SwiGLU: split the last axis in half, gate one with SiLU.
 /// `x, gates = x.chunk(2, -1); return silu(gates) * x`
 @inlinable

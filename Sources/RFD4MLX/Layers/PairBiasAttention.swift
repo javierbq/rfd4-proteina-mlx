@@ -19,29 +19,35 @@ public struct PairBiasAttention {
     public static let negInf: Float = -1e4
 
     let heads: Int, dimHead: Int
-    let nodeNorm: MLXArray
+    let nodeNorm: Norm
     let qkvW: MLXArray, qkvB: MLXArray
     let gW: MLXArray, gB: MLXArray
-    let qNorm: MLXArray, kNorm: MLXArray
+    let qNorm: Norm, kNorm: Norm
     let outW: MLXArray, outB: MLXArray
-    let pairNorm: MLXArray, biasW: MLXArray
-    let eps: Float
+    /// Absent when the module was built with `dim_pair: None` — the autoencoder's
+    /// towers have no pair track at all, and attention then carries only the mask.
+    let pairNorm: Norm?
+    let biasW: MLXArray?
 
-    public init(_ w: Weights, heads: Int, dimHead: Int, eps: Float = 1e-5) throws {
+    public init(_ w: Weights, heads: Int, dimHead: Int, kind: NormKind, eps: Float = 1e-5) throws {
         self.heads = heads
         self.dimHead = dimHead
-        self.eps = eps
-        nodeNorm = try w("node_norm.weight")
+        nodeNorm = Norm(w.scoped("node_norm"), kind: kind, eps: eps)
         qkvW = try w("to_qkv.weight")
         qkvB = try w("to_qkv.bias")
         gW = try w("to_g.weight")
         gB = try w("to_g.bias")
-        qNorm = try w("q_layer_norm.weight")
-        kNorm = try w("k_layer_norm.weight")
+        qNorm = Norm(w.scoped("q_layer_norm"), kind: kind, eps: eps)
+        kNorm = Norm(w.scoped("k_layer_norm"), kind: kind, eps: eps)
         outW = try w("to_out_node.weight")
         outB = try w("to_out_node.bias")
-        pairNorm = try w("pair_norm.weight")
-        biasW = try w("to_bias.weight")   // Linear(pair_dim -> heads, bias=False)
+        if w.has("to_bias.weight") {
+            pairNorm = Norm(w.scoped("pair_norm"), kind: kind, eps: eps)
+            biasW = try w("to_bias.weight")
+        } else {
+            pairNorm = nil
+            biasW = nil
+        }
     }
 
     /// `rearrange(t, "b n (h d) -> b h n d")`
@@ -55,9 +61,9 @@ public struct PairBiasAttention {
     ///   - pairFeats: `[b, n, n, pairDim]`
     ///   - pairMask: `[b, n, n]`, float — 1 where attention is allowed
     public func callAsFunction(
-        _ nodeFeats: MLXArray, pairFeats: MLXArray, pairMask: MLXArray
+        _ nodeFeats: MLXArray, pairFeats: MLXArray?, pairMask: MLXArray
     ) -> MLXArray {
-        let node = rmsNorm(nodeFeats, nodeNorm, eps: eps)
+        let node = nodeNorm(nodeFeats)
         let inner = heads * dimHead
 
         let qkv = linear(node, qkvW, qkvB)
@@ -69,15 +75,22 @@ public struct PairBiasAttention {
         // QK-LayerNorm is applied to the whole [b, n, 768] projection BEFORE the
         // head split, so it normalises across all heads together. Normalising per
         // head instead changes the result and is an easy transcription error.
-        q = rmsNorm(q, qNorm, eps: eps)
-        k = rmsNorm(k, kNorm, eps: eps)
+        q = qNorm(q)
+        k = kNorm(k)
         let g = linear(node, gW, gB)
 
         let qh = splitHeads(q), kh = splitHeads(k), vh = splitHeads(v), gh = splitHeads(g)
 
-        // Pair bias: [b, n, n, pairDim] -> [b, n, n, h] -> [b, h, n, n]
-        let pair = rmsNorm(pairFeats, pairNorm, eps: eps)
-        var attnBias = linear(pair, biasW).transposed(0, 3, 1, 2)
+        // Pair bias: [b, n, n, pairDim] -> [b, n, n, h] -> [b, h, n, n].
+        // With no pair track upstream builds a zero bias and masks it, so the
+        // attention is mask-only; the shape is the same either way.
+        var attnBias: MLXArray
+        if let pairFeats, let pairNorm, let biasW {
+            attnBias = linear(pairNorm(pairFeats), biasW).transposed(0, 3, 1, 2)
+        } else {
+            let n = nodeFeats.dim(1)
+            attnBias = MLX.zeros([nodeFeats.dim(0), heads, n, n])
+        }
 
         // mask [b, n, n] -> [b, 1, n, n]
         let maskExpanded = pairMask.expandedDimensions(axis: 1)
@@ -111,16 +124,16 @@ public struct PairBiasAttentionADALN {
     let mha: PairBiasAttention
     let scaleOutput: AdaptiveOutputScale
 
-    public init(_ w: Weights, heads: Int, dimHead: Int) throws {
-        adaln = try AdaptiveLayerNorm(w.scoped("adaln"))
-        mha = try PairBiasAttention(w.scoped("mha"), heads: heads, dimHead: dimHead)
+    public init(_ w: Weights, heads: Int, dimHead: Int, kind: NormKind) throws {
+        adaln = try AdaptiveLayerNorm(w.scoped("adaln"), kind: kind)
+        mha = try PairBiasAttention(w.scoped("mha"), heads: heads, dimHead: dimHead, kind: kind)
         scaleOutput = try AdaptiveOutputScale(w.scoped("scale_output"))
     }
 
     /// - Parameter mask: `[b, n]` float. The pair mask is its outer product, formed
     ///   here exactly as upstream does: `mask[:, :, None] * mask[:, None, :]`.
     public func callAsFunction(
-        _ x: MLXArray, pairRep: MLXArray, cond: MLXArray, mask: MLXArray
+        _ x: MLXArray, pairRep: MLXArray?, cond: MLXArray, mask: MLXArray
     ) -> MLXArray {
         let pairMask = mask.expandedDimensions(axis: 2) * mask.expandedDimensions(axis: 1)
         var y = adaln(x, cond: cond, mask: mask)

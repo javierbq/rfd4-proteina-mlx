@@ -151,7 +151,7 @@ struct LayerParityTests {
         try run("transformer_layers.0.mhba") { fx, w, i in
             let block = try PairBiasAttentionADALN(
                 w.scoped("nn.transformer_layers.0.mhba"),
-                heads: fx.heads, dimHead: fx.dimHead
+                heads: fx.heads, dimHead: fx.dimHead, kind: .rms
             )
             return block(i["x"]!, pairRep: i["pair_rep"]!, cond: i["cond"]!, mask: i["mask"]!)
         }
@@ -160,7 +160,8 @@ struct LayerParityTests {
     @Test("SwiGLU transition block matches upstream")
     func transitionParity() throws {
         try run("transformer_layers.0.transition") { _, w, i in
-            let block = try TransitionADALN(w.scoped("nn.transformer_layers.0.transition"))
+            let block = try TransitionADALN(w.scoped("nn.transformer_layers.0.transition"),
+                                            kind: .rms)
             return block(i["x"]!, cond: i["cond"]!, mask: i["mask"]!)
         }
     }
@@ -170,7 +171,7 @@ struct LayerParityTests {
         try run("transformer_layers.0") { fx, w, i in
             let layer = try TrunkLayer(
                 w.scoped("nn.transformer_layers.0"),
-                heads: fx.heads, dimHead: fx.dimHead
+                heads: fx.heads, dimHead: fx.dimHead, kind: .rms
             )
             return layer(i["x"]!, pairRep: i["pair_rep"]!, cond: i["cond"]!, mask: i["mask"]!)
         }

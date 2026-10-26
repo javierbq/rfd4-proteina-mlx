@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+*.xcodeproj
+__pycache__/
+*.pyc
+
+# Model weights are fetched from the HF Hub, never committed.
+weights/
+
+# NOTE: do NOT add a bare `fixtures/` rule here. git on macOS matches ignore
+# patterns case-insensitively, so it also swallows Tests/RFD4CoreTests/Fixtures/,
+# which is committed parity data the test target loads via Bundle.module.

@@ -47,6 +47,10 @@ let package = Package(
             dependencies: ["RFD4Core"],
             resources: [.process("Fixtures")]
         ),
-        .testTarget(name: "RFD4MLXTests", dependencies: ["RFD4MLX"]),
+        .testTarget(
+            name: "RFD4MLXTests",
+            dependencies: ["RFD4MLX"],
+            resources: [.process("Fixtures")]
+        ),
     ]
 )

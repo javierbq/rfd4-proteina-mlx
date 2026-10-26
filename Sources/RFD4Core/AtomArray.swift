@@ -61,6 +61,10 @@ public struct AtomArray: Sendable {
 
     public var count: Int { resName.count }
 
+    /// Valid atom indices. `AtomArray` is a struct of columns rather than a
+    /// collection of atoms, so this is the way to iterate positions.
+    public var indices: Range<Int> { 0 ..< count }
+
     /// Vocabulary slot per atom, `-1` where the residue/atom pair is unknown.
     ///
     /// Mirrors `build_atom37_slots`: lookup is residue-qualified and independent of

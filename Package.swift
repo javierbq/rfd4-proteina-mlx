@@ -40,6 +40,7 @@ let package = Package(
                 "RFD4Core",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
             ]
         ),
         .testTarget(

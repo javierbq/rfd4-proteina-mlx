@@ -104,6 +104,37 @@ def main() -> int:
         "token_type": entry(batch["token_type"].to(torch.float32)),
         "padding_mask": entry(batch["padding_mask"].to(torch.float32)),
     }
+    # The remaining batch fields the live features read. Names come from the
+    # condition registry, so they are looked up rather than hard-coded.
+    from rfproteina.conditions import C_CATH, C_CRDGRP, C_IDXGRP
+    for key, src in (("cath_code", C_CATH.full_name),
+                     ("coord_group", C_CRDGRP.full_name),
+                     ("index_group", C_IDXGRP.full_name),
+                     ("molecule_iid", "molecule_iid"),
+                     ("molecule_entity_id", "molecule_entity_id"),
+                     ("bond_order", "bond_order"),
+                     ("token_bond_path_length", "token_bond_path_length")):
+        if src in batch and torch.is_tensor(batch[src]):
+            inputs[key] = entry(batch[src].to(torch.float32))
+        else:
+            print(f"  (batch has no {src!r} for {key})")
+
+    # The three factory outputs, so the whole featurizer can be checked at once.
+    outs = {}
+    for fname in FACTORIES:
+        f = getattr(net, fname, None)
+        if f is None: continue
+        rec = {}
+        def grab(_m, _i, o, rec=rec):
+            # MUST return None: a forward hook that returns a value REPLACES the
+            # module's output, which silently feeds the fixture dict downstream.
+            if "out" not in rec and torch.is_tensor(o):
+                rec["out"] = entry(o)
+        h = f.register_forward_hook(grab)
+        with torch.no_grad():
+            net(batch)
+        h.remove()
+        if "out" in rec: outs[fname] = rec["out"]
 
     payload = {
         "note": "base64 little-endian float32. Generated; do not hand-edit.",
@@ -111,6 +142,7 @@ def main() -> int:
         "n_tokens": n_tokens,
         "inputs": inputs,
         "features": records,
+        "factories": outs,
     }
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")

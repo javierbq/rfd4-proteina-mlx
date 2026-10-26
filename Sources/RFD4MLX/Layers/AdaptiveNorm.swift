@@ -11,10 +11,11 @@ import MLX
 /// return (normed * gamma + beta) * mask[..., None]
 /// ```
 ///
-/// Upstream also carries a branch that broadcasts a `[b, dim_cond]` conditioning
-/// vector across spatial axes. The trunk always passes `cond` as `[b, n, dim_cond]`,
-/// so that branch is dead here and is deliberately not ported — porting it would
-/// mean reproducing a reshape no input reaches.
+/// Upstream also broadcasts a `[b, dim_cond]` conditioning vector across the spatial
+/// axes when one is given. The trunk's layers always pass `cond` as
+/// `[b, n, dim_cond]` and never reach that branch — but `PairReprBuilder` builds its
+/// conditioning with `compact: true`, which yields exactly `[b, dim_cond]` against a
+/// 4-D pair representation. So the branch is live, and both shapes are handled.
 public struct AdaptiveLayerNorm {
     /// `elementwise_affine: False` — no weight, hence a bare normalisation.
     let norm: Norm
@@ -37,8 +38,16 @@ public struct AdaptiveLayerNorm {
     public func callAsFunction(_ x: MLXArray, cond: MLXArray, mask: MLXArray) -> MLXArray {
         let normed = norm(x)
         let normedCond = normCond(cond)
-        let gamma = MLX.sigmoid(linear(normedCond, gammaW, gammaB))
-        let beta = linear(normedCond, betaW)
+        var gamma = MLX.sigmoid(linear(normedCond, gammaW, gammaB))
+        var beta = linear(normedCond, betaW)
+
+        // Per-example conditioning: reshape [b, dimCond] to [b, 1, ..., 1, dim] so it
+        // broadcasts across every spatial axis of x.
+        if cond.ndim == 2 && x.ndim > 2 {
+            let shape = [cond.dim(0)] + Array(repeating: 1, count: x.ndim - 2) + [x.dim(-1)]
+            gamma = gamma.reshaped(shape)
+            beta = beta.reshaped(shape)
+        }
         return (normed * gamma + beta) * mask.expandedDimensions(axis: -1)
     }
 }

@@ -19,6 +19,7 @@ struct FeatureParityTests {
         let torch: String
         let inputs: [String: Entry]
         let features: [String: Entry]
+        let factories: [String: Entry]?
     }
 
     nonisolated(unsafe) static let fixture: Fixture? = {

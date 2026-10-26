@@ -80,6 +80,10 @@ def build_batch(n_tokens: int, seed: int) -> dict:
 
     batch["padding_mask"] = torch.ones(1, n_tokens, dtype=torch.bool)
     batch["token_type"] = torch.full((1, n_tokens), TokenType.PROTEIN, dtype=torch.long)
+    # Without this the local_latents emit mask is all zeros, that head's output is
+    # identically zero, and any parity check on it compares zeros to zeros and
+    # passes while testing nothing. Every token here supports a local latent.
+    batch["supports_local_latent"] = torch.ones(1, n_tokens, dtype=torch.bool)
     batch["x_t"] = {
         "bb_ca": torch.randn(1, n_tokens, 3, generator=g),
         "local_latents": torch.randn(1, n_tokens, 32, generator=g),

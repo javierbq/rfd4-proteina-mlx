@@ -81,8 +81,13 @@ struct FeaturizerParityTests {
         let factories = try #require(fx.factories, "fixture carries no factory outputs")
         check(f.sequenceFeatures(b), Self.arr(try #require(factories["init_repr_factory"])),
               "init_repr_factory")
-        check(f.conditioning(b), Self.arr(try #require(factories["cond_factory"])),
-              "cond_factory")
+        // The fixture captures the FACTORY's output. What the trunk receives is
+        // that passed through transition_c_1 and c_2, which is checked separately
+        // in PredictStepTests against the trunk's own captured input — the two must
+        // not be conflated, since that conflation is what hid the missing
+        // transitions in the first place.
+        check(f.conditioningFactory(b), Self.arr(try #require(factories["cond_factory"])),
+              "cond_factory (pre-transition)")
         check(f.pairRepresentation(b), Self.arr(try #require(factories["pair_repr_builder"])),
               "pair_repr_builder")
     }

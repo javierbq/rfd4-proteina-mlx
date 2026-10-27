@@ -173,8 +173,9 @@ public struct Featurizer {
         return seqFactory(parts)
     }
 
-    /// `cond_factory` → `[b, n, dimCond]`.
-    public func conditioning(_ b: Batch) -> MLXArray {
+    /// `cond_factory` alone, **before** the two transitions — the factory's own
+    /// output, which is what a per-factory fixture captures.
+    public func conditioningFactory(_ b: Batch) -> MLXArray {
         let n = b.tokenCount, bs = b.batchSize
         // The two time embeddings are per-example; the factory's other features are
         // per-token, so they are broadcast across n before concatenation.
@@ -192,7 +193,13 @@ public struct Featurizer {
             default: parts.append(Features.inert([bs, n, slot.width]))
             }
         }
-        let c = condFactory(parts)
+        return condFactory(parts)
+    }
+
+    /// The conditioning the trunk actually receives: the factory output passed
+    /// through `transition_c_1` and `transition_c_2`.
+    public func conditioning(_ b: Batch) -> MLXArray {
+        let c = conditioningFactory(b)
         return transitionC2(transitionC1(c, mask: b.paddingMask), mask: b.paddingMask)
     }
 

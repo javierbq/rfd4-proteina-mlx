@@ -61,6 +61,21 @@ public enum Sampler {
         ]
     }
 
+    /// Whether this step injects noise, i.e. takes the SDE branch.
+    ///
+    /// Upstream draws its noise INSIDE that branch, so a port that draws
+    /// unconditionally advances its generator on steps where the reference does
+    /// not. The distributions stay correct, but the two streams can never be
+    /// aligned — which makes a matched-noise comparison impossible.
+    @inlinable
+    public static func isStochastic(t: Float, params: StepParams) -> Bool {
+        switch params.samplingMode {
+        case .vf: false
+        case .sc: t <= params.tLimODE
+        case .vfTSR: t != 0.0 && !(t > params.tLimODE || t < params.tLimODEBelow)
+        }
+    }
+
     /// One Euler step for one modality.
     ///
     /// - Parameters:
@@ -174,7 +189,11 @@ public enum Sampler {
                 guard let vm = v[mode], let ts = schedule.ts[mode],
                       let gts = schedule.gt[mode], let p = params[mode],
                       let emit = emitMasks[mode] else { continue }
-                let noise = noiseFor?(mode, stepIndex, x[mode]!.shape) ?? nil
+                // Only draw where the step will actually use it, so this stream
+                // has the same shape as the reference's.
+                let noise = isStochastic(t: ts[stepIndex], params: p)
+                    ? (noiseFor?(mode, stepIndex, x[mode]!.shape) ?? nil)
+                    : nil
                 x[mode] = step(
                     xT: x[mode]!, v: vm,
                     t: ts[stepIndex], dt: ts[stepIndex + 1] - ts[stepIndex],

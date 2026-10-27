@@ -44,6 +44,8 @@ public struct Generator {
         public var canonicalPolymerOrdering: MLXArray
         public var emitBBCA: MLXArray
         public var emitLocalLatents: MLXArray
+        /// What a conditioned design supplies beyond the layout; `nil` for de novo.
+        public var conditioning: Featurizer.Batch.Conditioning?
 
         public init(
             tokenCount: Int, tokenType: MLXArray, paddingMask: MLXArray,
@@ -51,7 +53,8 @@ public struct Generator {
             moleculeIID: MLXArray, moleculeEntityID: MLXArray,
             bondOrder: MLXArray, tokenBondPathLength: MLXArray,
             canonicalPolymerOrdering: MLXArray,
-            emitBBCA: MLXArray, emitLocalLatents: MLXArray
+            emitBBCA: MLXArray, emitLocalLatents: MLXArray,
+            conditioning: Featurizer.Batch.Conditioning? = nil
         ) {
             self.tokenCount = tokenCount
             self.tokenType = tokenType
@@ -66,6 +69,7 @@ public struct Generator {
             self.canonicalPolymerOrdering = canonicalPolymerOrdering
             self.emitBBCA = emitBBCA
             self.emitLocalLatents = emitLocalLatents
+            self.conditioning = conditioning
         }
 
         /// An unconditioned single-chain protein of `length` residues.
@@ -138,7 +142,8 @@ public struct Generator {
             indexGroup: s.indexGroup, moleculeIID: s.moleculeIID,
             moleculeEntityID: s.moleculeEntityID, bondOrder: s.bondOrder,
             tokenBondPathLength: s.tokenBondPathLength,
-            canonicalPolymerOrdering: s.canonicalPolymerOrdering)
+            canonicalPolymerOrdering: s.canonicalPolymerOrdering,
+            conditioning: s.conditioning)
     }
 
     /// Run the full trajectory and decode the result.

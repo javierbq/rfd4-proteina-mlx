@@ -182,6 +182,40 @@ public enum Features {
         return MLX.concatenated([flat, maskF], axis: -1)
     }
 
+    /// Conditional INTERNAL coordinates — `ConditionalAtom37NanometersInternalCoorsSeqFeat`.
+    ///
+    /// The other half of coordinate conditioning, and the half a protein binder
+    /// actually uses. `conditionalAtom37Coords` pins a target in absolute space;
+    /// this one supplies its internal geometry and leaves the pose free, which is
+    /// the shipped default for binder design (`C_CRDGRP` with no absolute
+    /// coordinates). On the released PD-L1 recipe the absolute feature is identically
+    /// zero and this one carries the entire target.
+    ///
+    /// The difference that matters is where the mask comes from. The absolute
+    /// feature derives it from which coordinates are finite; this one derives it
+    /// from the **group ids**, and only then replaces NaN. A port that reused the
+    /// finite-coordinate test would agree on well-formed input and diverge silently
+    /// on a group whose payload is partly NaN.
+    ///
+    /// - Parameters:
+    ///   - coords: `[b, n, 37, 3]` internal coordinates in Angstrom.
+    ///   - coordGroups: `[b, n, 37]` raw group ids — `-1` unconditioned, `0` absolute,
+    ///     positive for each internal-coordinate group.
+    /// - Returns: `[b, n, 37 * 4]` — flattened coordinates then the presence mask.
+    public static func conditionalAtom37InternalCoords(
+        _ coords: MLXArray, coordGroups: MLXArray
+    ) -> MLXArray {
+        let mask = MLX.logicalAnd(coordGroups .!= Float(CoordGroups.unknown),
+                                  coordGroups .!= Float(CoordGroups.knownAbsolute))
+        let maskF = mask.asType(.float32)
+        var nm = MLX.where(MLX.isNaN(coords), MLXArray(Float(0)), coords) / 10
+        nm = nm * maskF.expandedDimensions(axis: -1)
+
+        let (b, n) = (coords.dim(0), coords.dim(1))
+        let flat = nm.reshaped(b, n, Vocabulary.slotCount * 3)
+        return MLX.concatenated([flat, maskF], axis: -1)
+    }
+
     /// Hotspot annotation — `HotspotSeqFeat`.
     ///
     /// `[b, n, 37]` of hotspot flags, gated by which atom37 slots actually hold an

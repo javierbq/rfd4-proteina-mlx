@@ -37,9 +37,9 @@ public struct Featurizer {
         Slot("xt_bb_ca", 3, implemented: true),
         Slot("xt_local_latents", 32, implemented: true),
         Slot("token_type", 32, implemented: true),
-        Slot("sequence_probabilities", 56),
-        Slot("cond_a37coors_nm", 148),
-        Slot("cond_a37coors_internal_nm", 148),
+        Slot("sequence_probabilities", 56, implemented: true),
+        Slot("cond_a37coors_nm", 148, implemented: true),
+        Slot("cond_a37coors_internal_nm", 148, implemented: true),
         Slot("rasa_binned", 37),
         Slot("secondary_structure", 16),
         Slot("hbond_modernized", 74),
@@ -49,7 +49,7 @@ public struct Featurizer {
         Slot("hydrophobic", 37),
         Slot("metal_coord", 37),
         Slot("na_ss_state", 2),
-        Slot("hotspot", 37),
+        Slot("hotspot", 37, implemented: true),
         Slot("atom_charge", 16),
         Slot("atomic_element", 16),
         Slot("coord_group_seq", 37, implemented: true),
@@ -105,9 +105,54 @@ public struct Featurizer {
         public var tokenBondPathLength: MLXArray // [b, n, n]
         /// `[b, n, n]`, signed backbone linkage direction.
         public var canonicalPolymerOrdering: MLXArray
+        /// What a conditioned design supplies beyond the bare layout. `nil` for an
+        /// unconditioned run, where all four of these features are identically zero.
+        public var conditioning: Conditioning?
 
         public var batchSize: Int { xtBBCA.dim(0) }
         public var tokenCount: Int { xtBBCA.dim(1) }
+
+        /// The target a design is built against.
+        ///
+        /// Four features and no more: measured on upstream's own shipped binder
+        /// recipe, 17 of 35 creators carry signal against 13 for a de-novo monomer,
+        /// and these are the four that differ. Everything else a binder needs is
+        /// already in the layout.
+        public struct Conditioning {
+            /// `[b, n, 37, 3]` internal coordinates in **Angstrom**, NaN where absent.
+            /// The target's shape with its pose left free — the shipped binder default.
+            public var internalCoords: MLXArray?
+            /// `[b, n, 37, 3]` absolute coordinates in **Angstrom**, NaN where absent.
+            /// Pins the target in space; mutually exclusive with a free pose.
+            public var absoluteCoords: MLXArray?
+            /// `[b, n, 37]` raw `C_CRDGRP` ids: `-1` unconditioned, `0` absolute,
+            /// positive for each rigid internal-coordinate group.
+            public var coordGroups: MLXArray
+            /// `[b, n, 37]` coordinate groups densified for the sequence track; see
+            /// `CoordGroups.densified`. Carried rather than derived so the two
+            /// readings of one contract cannot drift apart.
+            public var coordGroupsDensified: MLXArray
+            /// 28 channels of `[b, n]`, in registry order, NaN where unspecified.
+            public var sequenceProbabilities: [MLXArray]
+            /// `[b, n, 37]` hotspot flags.
+            public var hotspot: MLXArray
+            /// `[b, n, 37]` which slots hold an atom at all.
+            public var atom37Mask: MLXArray
+
+            public init(
+                internalCoords: MLXArray? = nil, absoluteCoords: MLXArray? = nil,
+                coordGroups: MLXArray, coordGroupsDensified: MLXArray,
+                sequenceProbabilities: [MLXArray], hotspot: MLXArray, atom37Mask: MLXArray
+            ) {
+                self.internalCoords = internalCoords
+                self.absoluteCoords = absoluteCoords
+                self.coordGroups = coordGroups
+                self.coordGroupsDensified = coordGroupsDensified
+                self.sequenceProbabilities = sequenceProbabilities
+                self.hotspot = hotspot
+                self.atom37Mask = atom37Mask
+            }
+        }
     }
 
     // MARK: - modules
@@ -168,7 +213,28 @@ public struct Featurizer {
             case "xt_bb_ca": parts.append(b.xtBBCA)
             case "xt_local_latents": parts.append(b.xtLocalLatents)
             case "token_type": parts.append(seqTokenType(b.tokenType))
-            case "coord_group_seq": parts.append(b.coordGroup)
+            case "coord_group_seq":
+                // Densified when conditioning supplies groups; otherwise the de-novo
+                // all -1, for which densification is the identity.
+                parts.append(b.conditioning?.coordGroupsDensified ?? b.coordGroup)
+            case "cond_a37coors_nm":
+                parts.append(b.conditioning?.absoluteCoords.map {
+                    Features.conditionalAtom37Coords($0)
+                } ?? Features.inert([bs, n, slot.width]))
+            case "cond_a37coors_internal_nm":
+                parts.append(b.conditioning.flatMap { c in
+                    c.internalCoords.map {
+                        Features.conditionalAtom37InternalCoords($0, coordGroups: c.coordGroups)
+                    }
+                } ?? Features.inert([bs, n, slot.width]))
+            case "sequence_probabilities":
+                parts.append(b.conditioning.map {
+                    Features.sequenceProbabilities($0.sequenceProbabilities)
+                } ?? Features.inert([bs, n, slot.width]))
+            case "hotspot":
+                parts.append(b.conditioning.map {
+                    Features.hotspot($0.hotspot, atom37Mask: $0.atom37Mask)
+                } ?? Features.inert([bs, n, slot.width]))
             default: parts.append(Features.inert([bs, n, slot.width]))
             }
         }

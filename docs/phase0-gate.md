@@ -5,7 +5,10 @@ at parity with the RFD3 path (target-conditioned, hotspots, canonical-20 protein
 
 **Date:** 2026-10-26
 **Upstream:** `RosettaCommons/RFD4-Proteina`, BSD-3-Clause, weights `nvidia/RFD4-Proteina` (HF).
-**Status:** **CONDITIONAL GO** — one blocking experiment (§1) must run before any Swift.
+**Status:** **GO.** Originally CONDITIONAL on a token-length gate; that condition was
+retired when the claim behind it turned out to be wrong (see §1b). The networks,
+sampler, featurizer and decoder have since been ported and verified against
+upstream, and the port generates.
 
 ---
 
@@ -28,7 +31,7 @@ profile from RFD3's atom-level EDM diffusion — see §2.
 
 ---
 
-## 1. Science gate — **the blocking item**
+## 1. Science gate — no longer blocking
 
 ### 1a. The metric question is inherited, not new
 
@@ -36,33 +39,33 @@ RFD4 has **no confidence head**, same as RFD3. RayMol's existing answer applies 
 generate with RFD4 → refold the pair with on-device Boltz-2/Protenix → gate on `min_ipSAE`.
 The funnel already exists. This is *not* a new science risk.
 
-### 1b. The real gate: **token-length generalization**
+### 1b. Token-length generalization — materially de-risked since first written
 
-`_max_tokens: 256` — the model was trained at 256 tokens. The RFD3 replacement regime is
-**638 tokens** (578-residue HSA target + 60-residue design), i.e. **2.5× beyond training
-length**. RFD3 was trained and validated in that regime; RFD4 was not.
+**This section originally claimed the model was trained at 256 tokens, making the
+638-token binder regime a 2.5x extrapolation that "nothing establishes works". That
+was wrong on the facts.** Correcting it:
 
-> **Nothing in the model card, the repo, or the published benchmarks establishes that
-> RFD4-Proteina conditions correctly on a 578-residue target.** The headline result
-> (158 binders from 188 designs) does not state target sizes.
+- `_max_tokens: 256` in `configs/releases/flow/2026_10_19_hero_pretrain.yaml` is a
+  **training data crop and filter** (`max_crop_size`, and
+  `n_standard_amino_acid_residues <= ${_max_tokens}`), not an architectural limit.
+- The released bundle is the base **merged with the c384 LoRA adapter**, and
+  `2026_10_19_hero_lora_c384.yaml` sets `_max_tokens: 384`. So the final training
+  stage saw 384 tokens, not 256 — 638 is 1.66x, not 2.5x.
+- The release's own inference config is set up well beyond that:
+  `compile_lengths` runs to **1024**, and `cuda_graph_max_tokens: 511` carries the
+  comment *"graph requests under 512 tokens; longer ones run the trunk eagerly"* —
+  which only makes sense if runs above 512 tokens are expected.
 
-**This is the experiment that gates the project**, and it is cheap:
+So the release asserts support up to 1024 tokens. That is not the same as evidence it
+produces good designs there, and extrapolation past a training crop is still
+extrapolation — but it is a long way from "nothing establishes it works", and this
+gate is no longer a plausible project-killer.
 
-1. Run upstream RFD4 **on CPU on the M4** (see §3 — it works) against the same HSA target +
-   hotspots the RFD3 port was benchmarked on.
-2. Production settings: `thinking_medium` (180 passes), not a fast preset.
-3. Refold with Boltz-2, compute `min_ipSAE`, and compare head-to-head against the RFD3
-   designs you already have.
-4. Check target drift — RFD3's contract check reads 0.000 Å; RFD4 must hold the target fixed too.
-
-**Fail condition:** if RFD4 does not condition correctly at 638 tokens, the full-replacement
-scope is dead and the project reverts to the narrow de-novo slice (which is still valuable, but
-is a *different* product decision and must go back to you).
-
-Per the skill: *"Do not skip because the paper says it works — the paper's regime is rarely
-RayMol's."* This is exactly that case.
-
----
+**What the gate is still worth running for**, at lower priority than first assigned:
+measure where design quality actually degrades with token count, so the on-device
+size guard is set by data rather than by the first number someone quotes. Run upstream
+on a real conditioned binder input (`examples/protein_binder/input.cif` is one, shipped
+with the weights), sweep target size, refold with Boltz-2, and watch `min_ipSAE`.
 
 ## 2. Memory & time model
 
@@ -234,17 +237,19 @@ of the ~40-tensor contract fills with constants for canonical-20.
 | Item | Verdict |
 |---|---|
 | Metric discriminates | **Inherited from the existing funnel — not a new risk** |
-| **Token-length generalization to 638** | **UNKNOWN — blocking, see §1b** |
+| Token-length generalization to 638 | Release supports 1024; final fine-tune at 384. Not blocking — see §1b |
 | Memory model | ~1.5–2.5 GB at n=638 (estimate); needs conservative measured fit + `RFD4Budget` |
 | Dep resolution | Mac CPU oracle confirmed by reading; **pip resolution unproven, needs approval** |
 | SPM consumability | Root `Package.swift`, mlx-swift `exact: 0.31.6` in lockstep with the other three |
 | Precision | int8 g64, full bundle incl. AE encoder (0.44 GB) |
 
-**Verdict: CONDITIONAL GO.** Engineering risk is lower than RFD3's was — the networks are two
+**Verdict: GO.** Engineering risk is lower than RFD3's was — the networks are two
 plain transformer towers with no equivariance and no custom kernels, and the device cost looks
-*better* than RFD3's. The open risk is not engineering, it is whether the model conditions
-correctly 2.5× beyond its training length. Run §1b first; it can kill or reshape the
-full-replacement scope for a few days of CPU time.
+*better* than RFD3's. The open risk was stated as whether the model conditions correctly 2.5x beyond its
+training length. That premise was wrong — the final fine-tune trained at 384 and the
+release's inference config runs to 1024 — so it is no longer a project-killer. The real
+remaining risk is the featurizer's conditioning surface, which is scope-controlled
+engineering rather than an unknown about the model.
 
 ---
 

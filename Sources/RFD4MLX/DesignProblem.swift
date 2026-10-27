@@ -136,7 +136,7 @@ public struct DesignProblem {
     /// Build the static system and its conditioning payload.
     ///
     /// - Parameter seed: pins the rotation applied to each internal-coordinate group.
-    public func system(seed: UInt64 = 0) -> Generator.System {
+    public func system(seed: UInt64 = 0) throws -> Generator.System {
         let n = layout.count
         let slots = Vocabulary.slotCount
 
@@ -166,9 +166,30 @@ public struct DesignProblem {
         var key = MLXRandom.key(seed)
         var internalCoords = [Float](repeating: .nan, count: n * slots * 3)
         var anyInternal = false
-        for group in internalGroups {
+        for (index, group) in internalGroups.enumerated() {
+            // Upstream raises here rather than coping; so does this.
+            //
+            // Both of the lenient readings are silent catastrophes. Skipping a group
+            // whose members are not all present leaves `internalCoords` nil, so the
+            // conditioning slot goes inert and the run becomes an unconditioned
+            // design wearing a binder's token layout — it completes, and produces a
+            // chain that ignores the target. Letting a NaN through is worse: one
+            // unresolved backbone atom poisons the centroid, every coordinate in the
+            // group becomes NaN, and `conditionalAtom37InternalCoords` substitutes
+            // zero while the mask — which comes from the group ids, not from
+            // finiteness — still says "conditioned". The whole target then reads as
+            // pinned to the origin.
             let points = group.members.compactMap { coords[$0.token][$0.slot] }
-            guard points.count == group.members.count, !points.isEmpty else { continue }
+            guard points.count == group.members.count, !points.isEmpty else {
+                throw DesignProblemError.incompleteCoordinateGroup(
+                    group: index + 1, members: group.members.count, present: points.count)
+            }
+            if let bad = zip(group.members, points).first(where: {
+                !$0.1.x.isFinite || !$0.1.y.isFinite || !$0.1.z.isFinite
+            }) {
+                throw DesignProblemError.nonFiniteCoordinateGroup(
+                    group: index + 1, token: bad.0.token, slot: bad.0.slot)
+            }
             anyInternal = true
             let cx = points.reduce(Float(0)) { $0 + $1.x } / Float(points.count)
             let cy = points.reduce(Float(0)) { $0 + $1.y } / Float(points.count)
@@ -249,7 +270,7 @@ public struct DesignProblem {
     /// Build the system, refusing a contig upstream would refuse.
     public func validatedSystem(seed: UInt64 = 0) throws -> Generator.System {
         try validate()
-        return system(seed: seed)
+        return try system(seed: seed)
     }
 
     /// A uniformly random rotation matrix, row-major, from four Gaussians.
@@ -274,6 +295,10 @@ public enum DesignProblemError: Error, CustomStringConvertible {
     /// A contig asked for a peptide bond the input's coordinates cannot support.
     case impossibleBond(token: Int, chainID: String, upstreamResidue: Int?,
                         downstreamResidue: Int?, distance: Float)
+    /// A coordinate group named atoms the structure does not supply.
+    case incompleteCoordinateGroup(group: Int, members: Int, present: Int)
+    /// A coordinate group named an atom whose coordinates are not finite.
+    case nonFiniteCoordinateGroup(group: Int, token: Int, slot: Int)
 
     public var description: String {
         switch self {
@@ -286,6 +311,16 @@ public enum DesignProblemError: Error, CustomStringConvertible {
                 + "Insert a `/0` to split them into separate chains, or use a contig "
                 + "that preserves the gap.",
                 token - 1, token, named, d, Self.limit)
+
+        case .incompleteCoordinateGroup(let g, let members, let present):
+            return """
+                coordinate group \(g) names \(members) atoms but only \(present) are                 present in the structure. A group conditions on the shape its members                 make, so a partial one is not a smaller group — it is a different                 shape. Select atoms the input actually has.
+                """
+
+        case .nonFiniteCoordinateGroup(let g, let token, let slot):
+            return """
+                coordinate group \(g) needs finite coordinates: token \(token), atom37                 slot \(slot) is not resolved. One NaN makes the group's centroid NaN                 and every coordinate in it NaN, which the feature then reads as the                 origin while still reporting the group as conditioned. Exclude                 unresolved atoms, as the shipped recipe does with `not has_nan_coord()`.
+                """
         }
     }
 

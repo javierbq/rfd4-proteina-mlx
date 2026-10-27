@@ -223,6 +223,63 @@ struct BondPathLengthTests {
         }
     }
 
+    /// A coordinate group must be complete and finite, or the run is refused.
+    ///
+    /// Both lenient readings are silent catastrophes rather than degraded output, so
+    /// both are pinned here. Upstream raises for each
+    /// (`conditioning_utils.py:materialize_internal_coords`).
+    @Test("an incomplete or unresolved coordinate group is refused")
+    func coordinateGroupIntegrity() throws {
+        let layout = try Self.layout("4, /0, A17-20")
+        let slots = Vocabulary.slotCount
+        let known = [Int?](repeating: nil, count: layout.count)
+
+        func problem(_ mutate: (inout [[Vec3?]]) -> Void)
+            -> (DesignProblem, [(token: Int, slot: Int)]) {
+            var coords = [[Vec3?]](repeating: [Vec3?](repeating: nil, count: slots),
+                                   count: layout.count)
+            var members: [(token: Int, slot: Int)] = []
+            for t in 4 ..< layout.count {
+                let x = Float(t) * 3.8
+                for (slot, dx) in [(0, Float(0)), (1, 1.2), (2, 2.45)] {
+                    coords[t][slot] = Vec3(x + dx, 0, 0)
+                    members.append((t, slot))
+                }
+            }
+            mutate(&coords)
+            return (DesignProblem(
+                layout: layout, coords: coords,
+                internalGroups: [DesignProblem.CoordinateGroup(members: members)],
+                knownSequence: known), members)
+        }
+
+        // Complete and finite: builds, and the conditioning is actually present.
+        let (good, _) = problem { _ in }
+        let system = try good.system(seed: 0)
+        let conditioning = try #require(system.conditioning)
+        #expect(conditioning.internalCoords != nil,
+                "a well-formed group produced no internal coordinates")
+
+        // A member the structure does not supply. Skipping the group instead leaves
+        // `internalCoords` nil — an unconditioned run wearing a binder's layout,
+        // which completes and ignores the target.
+        let (missing, _) = problem { $0[5][1] = nil }
+        #expect(throws: DesignProblemError.self) { _ = try missing.system(seed: 0) }
+
+        // One unresolved atom. Letting it through makes the centroid NaN, hence every
+        // coordinate in the group NaN, which the feature turns into zeros while the
+        // mask still reports the group as conditioned — the target pinned to the
+        // origin, silently.
+        let (nan, _) = problem { $0[6][2] = Vec3(.nan, .nan, .nan) }
+        #expect(throws: DesignProblemError.self) { _ = try nan.system(seed: 0) }
+
+        // And the failure it guards against really would be silent: confirm that a
+        // NaN anywhere in a group poisons the whole group's centroid.
+        let poisoned = [Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(.nan, 0, 0)]
+        let mean = poisoned.reduce(Float(0)) { $0 + $1.x } / 3
+        #expect(mean.isNaN, "the premise of this guard no longer holds")
+    }
+
     /// A designed token has no coordinates, so it cannot be validated — and must not
     /// be mistaken for a violation.
     @Test("designed segments are not bond-checked")

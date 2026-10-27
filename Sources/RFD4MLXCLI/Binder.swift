@@ -97,13 +97,21 @@ enum BinderCommand {
         // `token.chainID` is the INPUT chain for exactly the tokens that have an
         // input residue — which is every token this loop acts on.
         var unknownResidues: [String: Int] = [:]
+        var unresolved = 0
         for (t, token) in layout.tokens.enumerated() {
             guard let rid = token.inputResidue else { continue }
             let key = ResidueKey(chain: token.chainID, residue: rid)
             guard let atoms = atomsByResidue[key] else { continue }
             for atom in atoms {
                 coords[t][atom.slot] = atom.coord
-                if o.backboneAtoms.contains(atom.name) { backbone.append((t, atom.slot)) }
+                // `not has_nan_coord()` in the shipped recipe's selection. An
+                // unresolved atom has no geometry to condition on, and including one
+                // makes the whole group's centroid NaN.
+                let resolved = atom.coord.x.isFinite && atom.coord.y.isFinite
+                    && atom.coord.z.isFinite
+                if o.backboneAtoms.contains(atom.name) {
+                    if resolved { backbone.append((t, atom.slot)) } else { unresolved += 1 }
+                }
                 if wanted.contains("\(token.chainID)/\(rid)/\(atom.name)") {
                     hotspots.append((t, atom.slot))
                 }
@@ -123,6 +131,10 @@ enum BinderCommand {
                 .map { "\($0.key)×\($0.value)" }.joined(separator: ", ")
             print("note: \(listed) are outside the 28 sequence-probability channels; "
                   + "their sequence is left unspecified")
+        }
+        if unresolved > 0 {
+            print("note: \(unresolved) unresolved backbone atoms excluded from the "
+                  + "rigid group")
         }
         print("conditioning: \(backbone.count) backbone atoms in one rigid group, "
               + "\(hotspots.count) hotspot atoms, "

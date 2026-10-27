@@ -158,7 +158,7 @@ struct BinderFeaturizerTests {
         let known = [Int?](repeating: nil, count: n)
 
         // The binder case: nothing is context, everything supports a local latent.
-        let plain = DesignProblem(layout: layout, coords: coords, knownSequence: known)
+        let plain = try DesignProblem(layout: layout, coords: coords, knownSequence: known)
             .system(seed: 0)
         #expect(MLX.all(plain.emitBBCA .== 1).item(Bool.self))
         #expect(MLX.all(plain.emitLocalLatents .== 1).item(Bool.self))
@@ -171,7 +171,7 @@ struct BinderFeaturizerTests {
         var supports = [Bool](repeating: true, count: n)
         supports[200] = false
 
-        let partial = DesignProblem(
+        let partial = try DesignProblem(
             layout: layout, coords: coords, knownSequence: known,
             isContext: context, supportsLocalLatent: supports).system(seed: 0)
         let bb = partial.emitBBCA[0].asArray(Float.self)
@@ -246,7 +246,7 @@ struct BinderFeaturizerTests {
             layout: layout, coords: coords,
             internalGroups: [DesignProblem.CoordinateGroup(members: members)],
             hotspots: hots, knownSequence: knownSequence)
-        let system = problem.system(seed: 0)
+        let system = try problem.system(seed: 0)
         let c = try #require(system.conditioning)
 
         #expect(system.tokenCount == 225)

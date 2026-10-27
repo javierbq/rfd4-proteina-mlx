@@ -126,17 +126,33 @@ public struct Generator {
         strategy: ReleasedRecycleStrategy = .thinkingMedium,
         seed: UInt64 = 0,
         stochastic: Bool = true,
+        recycleDepths depthOverride: [Int]? = nil,
         onStep: ((Int, Int) -> Void)? = nil
     ) throws -> Result {
         let nsteps = ReleasedRecycleStrategy.nsteps
         let schedule = try sampleSchedule(nsteps: nsteps, modalities: ModalityConfig.released)
-        let depths = try strategy.config.depths(nsteps: nsteps, fullNsteps: nsteps)
+        // An override exists so a run can be matched to a reference trace;
+        // comparing two runs at different depths is not a comparison.
+        let depths = try depthOverride
+            ?? strategy.config.depths(nsteps: nsteps, fullNsteps: nsteps)
 
-        MLXRandom.seed(seed)
+        // A LOCAL key, not MLXRandom.seed(). Seeding is process-global state, so
+        // any other draw anywhere in the process — a test running in parallel, a
+        // second generation — interleaves with this trajectory and makes a seeded
+        // run unreproducible. That is not a test-only concern: the playbook's
+        // matched-noise accuracy work compares two runs that must differ ONLY in
+        // precision, which a shared generator quietly breaks.
+        var key = MLXRandom.key(seed)
+        func draw(_ shape: [Int]) -> MLXArray {
+            let keys = MLXRandom.split(key: key, into: 2)
+            key = keys[0]
+            return MLXRandom.normal(shape, key: keys[1])
+        }
+
         let n = system.tokenCount
         let x0: [String: MLXArray] = [
-            "bb_ca": MLXRandom.normal([1, n, 3]),
-            "local_latents": MLXRandom.normal([1, n, 32]),
+            "bb_ca": draw([1, n, 3]),
+            "local_latents": draw([1, n, 32]),
         ]
 
         var pass = 0
@@ -154,7 +170,7 @@ public struct Generator {
                 pass += max(1, depth)
                 return ["bb_ca": out.bbCA, "local_latents": out.localLatents]
             },
-            noiseFor: { _, _, shape in stochastic ? MLXRandom.normal(shape) : nil },
+            noiseFor: { _, _, shape in stochastic ? draw(shape) : nil },
             onStep: { step, x in
                 if ProcessInfo.processInfo.environment["RFD4_TRACE"] != nil,
                    step % 10 == 0 || step == nsteps - 1 {

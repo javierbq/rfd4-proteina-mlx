@@ -39,11 +39,15 @@ def entry(t: torch.Tensor) -> dict:
 def main() -> int:
     snap, out = Path(sys.argv[1]), Path(sys.argv[2])
     n_tokens = int(sys.argv[3]) if len(sys.argv) > 3 else 8
+    n_recycle = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 
     model = Proteina.from_pretrained(snap, device="cpu")
     net = model.nn
     net.eval()
     batch = build_batch(n_tokens, 0)
+    # The recycle loop is only exercised above depth 1 here; a fixture at
+    # depth 1 leaves the feedback projections and the loop itself untested.
+    batch["n_recycle"] = n_recycle
 
     record: dict = {}
     original = net._run_trunk

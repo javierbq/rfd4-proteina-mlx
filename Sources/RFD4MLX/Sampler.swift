@@ -152,18 +152,25 @@ public enum Sampler {
         onStep: ((_ step: Int, _ x: [String: MLXArray]) -> Void)? = nil
     ) -> [String: MLXArray] {
         var x = x0
-        for (mode, mask) in emitMasks where x[mode] != nil {
-            x[mode] = x[mode]! * mask.expandedDimensions(axis: -1)
+        // Dictionary iteration order is NOT stable across processes in Swift, and
+        // the modalities draw from a shared noise stream in this order. Iterating
+        // the dictionary directly makes a seeded run unreproducible between runs,
+        // which silently breaks any matched-noise comparison. Sort once, use
+        // everywhere below.
+        let modes = x.keys.sorted()
+
+        for mode in modes where emitMasks[mode] != nil {
+            x[mode] = x[mode]! * emitMasks[mode]!.expandedDimensions(axis: -1)
         }
 
         for stepIndex in 0 ..< nsteps {
             var t = [String: Float]()
-            for mode in x.keys { t[mode] = schedule.ts[mode]![stepIndex] }
+            for mode in modes { t[mode] = schedule.ts[mode]![stepIndex] }
 
             let depth = stepIndex < recycleDepths.count ? recycleDepths[stepIndex] : 1
             let v = predict(x, t, depth)
 
-            for mode in x.keys {
+            for mode in modes {
                 guard let vm = v[mode], let ts = schedule.ts[mode],
                       let gts = schedule.gt[mode], let p = params[mode],
                       let emit = emitMasks[mode] else { continue }

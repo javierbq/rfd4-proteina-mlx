@@ -62,28 +62,28 @@ struct GenerationTests {
                      n, seconds, mean, minD, maxD,
                      Int(result.atomMask.asType(.float32).sum().item(Float.self))))
 
-        // KNOWN DEFECT — the trajectory expands where upstream contracts.
+        // OPEN QUESTION — more expanded than upstream at the same depth.
         //
-        // Fixed since first observed: the chain no longer collapses to a point.
-        // That was two missing transition layers on the conditioning, and with
-        // them the predicted vector field matches upstream to 3e-06 at every
-        // sampled time (see PredictStepTests).
+        // Two earlier readings of this were wrong and are worth not repeating:
         //
-        // What remains is a dynamics difference, same batch, same length:
+        //   "it collapses to a point" — real, and fixed. Two missing conditioning
+        //   transitions; v now matches upstream to 3e-06 at every sampled time.
         //
-        //   upstream   step 0  Rg 1.458 nm    step 59  Rg 0.856 nm   (contracts)
-        //   this port  step 0  Rg 1.521 nm    step 59  Rg 2.784 nm   (expands)
+        //   "it expands where upstream contracts" — an artifact of comparing
+        //   different recycle depths. Upstream expands at this depth too:
         //
-        // The initial states agree, so it is not the noise draw's scale —
-        // MLXRandom.normal measures mean 0.0009, sd 0.9983. v is at parity, the
-        // integration step is bit-exact across all six branches, and the schedules
-        // are bit-exact. The two runs also used different recycle depths, which is
-        // not a fair comparison and is the first thing to eliminate.
+        //     depth 1        upstream Rg 0.856    this port Rg 0.938
+        //     thinkingLow    upstream Rg 1.548    this port Rg 2.784
         //
-        // Next: drive both from an identical noise sequence and the same depth, so
-        // the trajectories are directly comparable rather than two draws.
-        withKnownIssue("trajectory expands where upstream contracts") {
-            #expect(mean > 2.0 && mean < 6.0, "CA-CA \(mean) A is outside protein range")
+        // So the direction agrees and depth 1 agrees closely. What is left is a
+        // ~1.8x gap at thinkingLow, on a SINGLE 16-residue draw at low effort,
+        // where sample variance is large. That is not evidence of a defect and it
+        // is not evidence of correctness either.
+        //
+        // Settling it needs matched noise — the same draw sequence on both sides —
+        // not another eyeball comparison of two independent samples.
+        withKnownIssue("more expanded than upstream at thinkingLow; unresolved") {
+            #expect(mean > 2.0 && mean < 6.0, "CA-CA \(mean) A outside protein range")
         }
 
         // Every emitted residue must carry its reference atom.

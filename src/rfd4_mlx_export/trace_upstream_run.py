@@ -63,7 +63,16 @@ def main() -> int:
 
     fm = model.fm
     sampling_args = gen_cfg["model"]
-    depths = tuple(1 for _ in range(nsteps))   # depth 1: this is a wiring probe
+    # Depth schedule: "flat" for the wiring probe, or a released strategy so the
+    # comparison is against the same vector field the Swift run uses.
+    mode = sys.argv[5] if len(sys.argv) > 5 else "flat"
+    if mode == "flat":
+        depths = tuple(1 for _ in range(nsteps))
+    else:
+        bands = {"low": [[10, 4], [10, 3], [10, 2], [30, 1]],
+                 "medium": [[5, 6], [10, 5], [5, 4], [10, 3], [20, 2], [10, 1]]}[mode]
+        depths = tuple(d for w, d in bands for _ in range(w))
+        assert len(depths) == nsteps, f"{mode} expands to {len(depths)}, not {nsteps}"
     print(f"upstream full_simulation: n={n} nsteps={nsteps} "
           f"trunk passes={sum(max(1, d) for d in depths)}")
 

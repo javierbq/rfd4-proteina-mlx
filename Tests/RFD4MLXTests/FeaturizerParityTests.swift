@@ -38,7 +38,8 @@ struct FeaturizerParityTests {
             moleculeIID: try input("molecule_iid"),
             moleculeEntityID: try input("molecule_entity_id"),
             bondOrder: try input("bond_order"),
-            tokenBondPathLength: try input("token_bond_path_length")
+            tokenBondPathLength: try input("token_bond_path_length"),
+            canonicalPolymerOrdering: try input("canonical_polymer_ordering")
         )
     }
 

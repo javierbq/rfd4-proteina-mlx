@@ -40,6 +40,8 @@ public struct Generator {
         public var moleculeEntityID: MLXArray
         public var bondOrder: MLXArray
         public var tokenBondPathLength: MLXArray
+        /// `+1` at [downstream, upstream], `-1` transposed, 0 elsewhere.
+        public var canonicalPolymerOrdering: MLXArray
         public var emitBBCA: MLXArray
         public var emitLocalLatents: MLXArray
 
@@ -48,6 +50,7 @@ public struct Generator {
             cathCode: MLXArray, coordGroup: MLXArray, indexGroup: MLXArray,
             moleculeIID: MLXArray, moleculeEntityID: MLXArray,
             bondOrder: MLXArray, tokenBondPathLength: MLXArray,
+            canonicalPolymerOrdering: MLXArray,
             emitBBCA: MLXArray, emitLocalLatents: MLXArray
         ) {
             self.tokenCount = tokenCount
@@ -60,31 +63,55 @@ public struct Generator {
             self.moleculeEntityID = moleculeEntityID
             self.bondOrder = bondOrder
             self.tokenBondPathLength = tokenBondPathLength
+            self.canonicalPolymerOrdering = canonicalPolymerOrdering
             self.emitBBCA = emitBBCA
             self.emitLocalLatents = emitLocalLatents
         }
 
         /// An unconditioned single-chain protein of `length` residues.
         ///
-        /// Every static field is a constant in this regime, measured from the
-        /// batch upstream builds: token type 0 (protein), everything unpaired and
-        /// ungrouped at -1, no bonds, no CATH code. A conditioned run fills the
-        /// same fields from a parsed structure instead.
-        public static func deNovo(length n: Int) -> System {
+        /// **These fields must describe a POLYMER, not just n residues.** The
+        /// connectivity ones are what tell the network the tokens form one chain in
+        /// order; filling them with the schema's defaults instead says the opposite,
+        /// and the model obeys: it generates a cloud of unbonded fragments with no
+        /// backbone. Values here are read off a real de-novo request built through
+        /// upstream's own dataset and pipeline, not from the schema defaults.
+        ///
+        ///   - `tokenBondPathLength` = `min(|i-j|, pathLengthCap)`. Upstream clamps
+        ///     to the BFS cutoff plus one; all-zeros means "every pair disconnected".
+        ///   - `canonicalPolymerOrdering` = `+1` at `[i+1, i]` and `-1` at `[i, i+1]`,
+        ///     the direction of each backbone linkage. All-zeros means "no backbone".
+        ///   - `tokIdx` runs 0..<n, and the chain, molecule, entity and index-group
+        ///     ids are **0**, not -1: -1 reads as "ungrouped", so every token looks
+        ///     like it belongs to a different molecule.
+        public static func deNovo(length n: Int, pathLengthCap: Int = 65) -> System {
             func filled(_ v: Float, _ shape: [Int]) -> MLXArray {
                 MLX.full(shape, values: MLXArray(v))
             }
+            let idx = MLXArray(Array(0 ..< n).map(Float.init))
+
+            // |i - j|, clamped.
+            let diff = MLX.abs(idx.expandedDimensions(axis: 1) - idx.expandedDimensions(axis: 0))
+            let pathLength = MLX.minimum(diff, Float(pathLengthCap)).expandedDimensions(axis: 0)
+
+            // +1 at [downstream, upstream]; -1 at the transpose.
+            let delta = idx.expandedDimensions(axis: 1) - idx.expandedDimensions(axis: 0)
+            let adjacent = MLX.abs(delta) .== 1
+            let ordering = MLX.where(adjacent, MLX.sign(delta), MLXArray(Float(0)))
+                .expandedDimensions(axis: 0)
+
             return System(
                 tokenCount: n,
                 tokenType: filled(0, [1, n]),
                 paddingMask: filled(1, [1, n]),
                 cathCode: filled(-1, [1, n, 3]),
                 coordGroup: filled(-1, [1, n, 37]),
-                indexGroup: filled(-1, [1, n]),
-                moleculeIID: filled(-1, [1, n]),
-                moleculeEntityID: filled(-1, [1, n]),
+                indexGroup: filled(0, [1, n]),
+                moleculeIID: filled(0, [1, n]),
+                moleculeEntityID: filled(1, [1, n]),
                 bondOrder: filled(0, [1, n, n]),
-                tokenBondPathLength: filled(0, [1, n, n]),
+                tokenBondPathLength: pathLength,
+                canonicalPolymerOrdering: ordering,
                 emitBBCA: filled(1, [1, n]),
                 emitLocalLatents: filled(1, [1, n]))
         }
@@ -110,7 +137,8 @@ public struct Generator {
             cathCode: s.cathCode, coordGroup: s.coordGroup,
             indexGroup: s.indexGroup, moleculeIID: s.moleculeIID,
             moleculeEntityID: s.moleculeEntityID, bondOrder: s.bondOrder,
-            tokenBondPathLength: s.tokenBondPathLength)
+            tokenBondPathLength: s.tokenBondPathLength,
+            canonicalPolymerOrdering: s.canonicalPolymerOrdering)
     }
 
     /// Run the full trajectory and decode the result.

@@ -88,6 +88,25 @@ def build_batch(n_tokens: int, seed: int) -> dict:
         "bb_ca": torch.randn(1, n_tokens, 3, generator=g),
         "local_latents": torch.randn(1, n_tokens, 32, generator=g),
     }
+    # A POLYMER, not n loose tokens.
+    #
+    # Every connectivity key above is left at its schema default, which reads as
+    # "unknown": no bond path between any pair, no backbone direction, and -1 for
+    # the molecule ids, which means "ungrouped" and so makes every token look like a
+    # separate molecule. The network believes it and generates a cloud of unbonded
+    # fragments. These are the values upstream's own data pipeline produces for a
+    # single de-novo chain, and the Swift `System.deNovo` mirrors them exactly.
+    i = torch.arange(n_tokens)
+    sep = i[:, None] - i[None, :]
+    batch["token_bond_path_length"] = sep.abs().clamp(max=65)[None].to(torch.int16)
+    # +1 at [downstream, upstream], -1 at the transpose: signed, so it carries
+    # chain direction rather than mere adjacency.
+    batch["canonical_polymer_ordering"] = torch.where(
+        sep.abs() == 1, sep.sign(), torch.zeros_like(sep))[None].to(torch.int8)
+    batch["tok_idx"] = i[None].to(torch.int16)
+    batch["molecule_iid"] = torch.zeros(1, n_tokens, dtype=torch.int16)
+    batch["molecule_entity_id"] = torch.ones(1, n_tokens, dtype=torch.int16)
+
     batch["t"] = {"bb_ca": torch.full((1,), 0.5), "local_latents": torch.full((1,), 0.5)}
     batch["n_recycle"] = 1
     return batch

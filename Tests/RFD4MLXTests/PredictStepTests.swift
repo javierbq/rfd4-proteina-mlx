@@ -63,7 +63,8 @@ struct PredictStepTests {
                 cathCode: system.cathCode, coordGroup: system.coordGroup,
                 indexGroup: system.indexGroup, moleculeIID: system.moleculeIID,
                 moleculeEntityID: system.moleculeEntityID, bondOrder: system.bondOrder,
-                tokenBondPathLength: system.tokenBondPathLength)
+                tokenBondPathLength: system.tokenBondPathLength,
+                canonicalPolymerOrdering: system.canonicalPolymerOrdering)
 
             let (sInit, zInit, cond) = featurizer(b)
 

@@ -113,7 +113,8 @@ def main() -> int:
                      ("molecule_iid", "molecule_iid"),
                      ("molecule_entity_id", "molecule_entity_id"),
                      ("bond_order", "bond_order"),
-                     ("token_bond_path_length", "token_bond_path_length")):
+                     ("token_bond_path_length", "token_bond_path_length"),
+                     ("canonical_polymer_ordering", "canonical_polymer_ordering")):
         if src in batch and torch.is_tensor(batch[src]):
             inputs[key] = entry(batch[src].to(torch.float32))
         else:

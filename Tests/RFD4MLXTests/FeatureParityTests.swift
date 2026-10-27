@@ -132,7 +132,6 @@ struct FeatureParityTests {
             "init_repr_factory/ChiralitySeqFeat",
             "cond_factory/RecycleRemainingBatchFeat",
             "pair_repr_builder/BondMaskPairFeat",
-            "pair_repr_builder/CanonicalPolymerOrderingPairFeat",
         ]
         for key in expectedInert {
             let e = try #require(fx.features[key], "no capture for \(key)")
@@ -141,9 +140,16 @@ struct FeatureParityTests {
         // RecycleRemaining being inert confirms it one-hots to a constant under
         // recycle.grad=last, so the trunk can hard-code it.
         #expect(fx.features["cond_factory/RecycleRemainingBatchFeat"]?.dead == true)
+        // This one was inert only because the fixture's batch was wrong: it left
+        // every connectivity field at the schema default, so the chain had no
+        // backbone and this feature had nothing to describe. A de-novo protein IS a
+        // polymer, so it carries signal — and must, or generation returns a cloud of
+        // disconnected fragments.
+        #expect(fx.features["pair_repr_builder/CanonicalPolymerOrderingPairFeat"]?.dead
+                == false, "the de-novo batch is not a connected chain")
 
         let live = fx.features.values.filter { !$0.dead }.count
-        #expect(live == 13, "expected 13 live creators, found \(live)")
+        #expect(live == 14, "expected 14 live creators, found \(live)")
         #expect(fx.features.count == 35)
     }
 

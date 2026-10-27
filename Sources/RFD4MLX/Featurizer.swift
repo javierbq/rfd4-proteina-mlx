@@ -76,7 +76,7 @@ public struct Featurizer {
         Slot("molecule_idx_pair", 1, implemented: true),
         Slot("molecule_entity_pair", 1, implemented: true),
         Slot("token_bond_path_length", 64, implemented: true),
-        Slot("canonical_polymer_ordering", 1),
+        Slot("canonical_polymer_ordering", 1, implemented: true),
         Slot("na_ss_pair", 2),
     ]
 
@@ -103,6 +103,8 @@ public struct Featurizer {
         public var moleculeEntityID: MLXArray  // [b, n]
         public var bondOrder: MLXArray         // [b, n, n]
         public var tokenBondPathLength: MLXArray // [b, n, n]
+        /// `[b, n, n]`, signed backbone linkage direction.
+        public var canonicalPolymerOrdering: MLXArray
 
         public var batchSize: Int { xtBBCA.dim(0) }
         public var tokenCount: Int { xtBBCA.dim(1) }
@@ -217,6 +219,8 @@ public struct Featurizer {
             case "index_group_pair": parts.append(Features.samenessPair(b.indexGroup))
             case "molecule_idx_pair": parts.append(Features.samenessPair(b.moleculeIID))
             case "molecule_entity_pair": parts.append(Features.samenessPair(b.moleculeEntityID))
+            case "canonical_polymer_ordering":
+                parts.append(Features.canonicalPolymerOrdering(b.canonicalPolymerOrdering))
             case "token_bond_path_length":
                 // bin 0 is self / disconnected / cross-group, the last bin is overflow.
                 let clamped = MLX.minimum(b.tokenBondPathLength, Float(seqSepDim - 1))

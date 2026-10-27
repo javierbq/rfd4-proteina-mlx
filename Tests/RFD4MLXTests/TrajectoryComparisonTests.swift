@@ -71,18 +71,26 @@ struct TrajectoryComparisonTests {
                                  recycleDepths: Array(repeating: 1, count: nsteps))
         let g = Self.geometry(r.xFinal["bb_ca"]!)
 
-        // Upstream, same batch, same depth, 60 steps:
-        //   step 0  Rg 1.458 nm  CA-CA 1.859 nm
-        //   final   Rg 0.856 nm  CA-CA 1.064 nm
+        // Upstream, same batch, same depth, 60 steps (trace_upstream_run.py):
+        //   start   Rg 1.583 nm  CA-CA 2.091 nm
+        //   final   Rg 0.718 nm  CA-CA 0.375 nm (min 0.371 max 0.377)
+        //
+        // These replace an earlier pair (0.856 / 1.064) recorded when the probe's
+        // batch left every connectivity field at the schema default. That batch was
+        // not a chain, so neither implementation was being asked for one and the
+        // reference encoded the defect. 0.375 nm is the real CA-CA spacing of a
+        // protein backbone; 1.064 nm was a cloud of unbonded fragments.
         print(String(format: "     matched depth 1: final Rg %.3f nm  CA-CA %.3f nm "
-                     + "(upstream 0.856 / 1.064)", g.rg, g.caca))
+                     + "(upstream 0.718 / 0.375)", g.rg, g.caca))
 
         #expect(MLX.all(MLX.isFinite(r.xFinal["bb_ca"]!)).item(Bool.self))
-        // Two different noise draws will not land in the same place, but they do
-        // land on the same order of compactness — which is what this asserts.
-        // At depth 1 this port reaches Rg 0.876 against upstream's 0.856, so the
-        // earlier "expansion" was the unfair comparison, not a second defect.
-        #expect(g.rg < 1.6, "Rg \(g.rg) nm — upstream reaches 0.856")
-        #expect(g.caca > 0.5 && g.caca < 2.0, "CA-CA \(g.caca) nm out of range")
+        // Two different noise draws will not land in the same place, so Rg is only
+        // bounded. CA-CA is not: consecutive spacing along a real backbone is fixed
+        // by chemistry, so it is the sharpest available check that what came out is
+        // a polymer and not a point cloud. A port that drops connectivity lands
+        // around 1.0 nm here and fails.
+        #expect(g.rg < 1.2, "Rg \(g.rg) nm — upstream reaches 0.718")
+        #expect(g.caca > 0.33 && g.caca < 0.43,
+                "CA-CA \(g.caca) nm — a protein backbone is ~0.38 nm")
     }
 }

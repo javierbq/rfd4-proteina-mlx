@@ -145,6 +145,77 @@ public enum Features {
         public var inputWidth: Int { projW.dim(1) }
     }
 
+    // MARK: - conditioning
+
+    /// Conditional all-atom coordinates — `ConditionalAtom37NanometersCoorsSeqFeat`.
+    ///
+    /// **This is how a target structure enters the model.** Without it the network
+    /// has no idea a target exists, which is why every conditioning feature measures
+    /// inert on an unconditioned run and why binder design needs exactly this one.
+    ///
+    /// Two details that are easy to lose and silently halve the signal:
+    ///   - the batch carries these in **Angstrom**; the model works in nanometres,
+    ///     so they are divided by 10 here.
+    ///   - unconditioned positions arrive as **NaN**, not as zeros. The mask is
+    ///     derived from which rows are finite, then NaN is replaced with zero. A
+    ///     port that trusted zeros would treat "no constraint" as "constrained to
+    ///     the origin".
+    ///
+    /// - Parameter coords: `[b, n, 37, 3]`, Angstrom, NaN where unconditioned.
+    /// - Returns: `[b, n, 37 * 4]` — flattened coordinates then the presence mask.
+    public static func conditionalAtom37Coords(
+        _ coords: MLXArray, relative: Bool = false
+    ) -> MLXArray {
+        let finite = MLX.any(MLX.isFinite(coords), axis: -1)          // [b, n, 37]
+        let maskF = finite.asType(.float32)
+        var nm = MLX.where(MLX.isNaN(coords), MLXArray(Float(0)), coords) / 10
+        nm = nm * maskF.expandedDimensions(axis: -1)
+
+        if relative {
+            // Slot 1 is CA; offsets are measured from it.
+            let ca = nm[0..., 0..., 1, 0...].expandedDimensions(axis: 2)
+            nm = (nm - ca) * maskF.expandedDimensions(axis: -1)
+        }
+
+        let (b, n) = (coords.dim(0), coords.dim(1))
+        let flat = nm.reshaped(b, n, Vocabulary.slotCount * 3)
+        return MLX.concatenated([flat, maskF], axis: -1)
+    }
+
+    /// Hotspot annotation — `HotspotSeqFeat`.
+    ///
+    /// `[b, n, 37]` of hotspot flags, gated by which atom37 slots actually hold an
+    /// atom, so a hotspot cannot be declared on a slot the residue does not have.
+    public static func hotspot(_ hot: MLXArray, atom37Mask: MLXArray) -> MLXArray {
+        hot.asType(.float32) * atom37Mask.asType(.float32)
+    }
+
+    /// Sequence probabilities — `SequenceProbabilitiesSeqFeat`.
+    ///
+    /// `[b, n, 2 * K]`: the probabilities, then a mask of which were explicitly
+    /// specified. The mask is the point — it makes an explicit probability of zero
+    /// ("definitely not this residue") distinguishable from an unconstrained
+    /// position, which the probability value alone cannot express. Unspecified
+    /// entries arrive as NaN.
+    ///
+    /// - Parameter channels: `K` arrays of `[b, n]`, in registry order.
+    public static func sequenceProbabilities(_ channels: [MLXArray]) -> MLXArray {
+        guard !channels.isEmpty else { return MLXArray([Float]()) }
+        let stacked = MLX.stacked(channels, axis: -1)                 // [b, n, K]
+        let specified = MLX.logicalNot(MLX.isNaN(stacked))
+        let values = MLX.where(specified, stacked, MLXArray(Float(0)))
+        return MLX.concatenated([values, specified.asType(.float32)], axis: -1)
+    }
+
+    /// Backbone linkage direction — `CanonicalPolymerOrderingPairFeat`.
+    ///
+    /// A pass-through of the `[b, n, n]` array the data pipeline builds: `+1` at
+    /// `[downstream, upstream]`, `-1` at the transpose, `0` elsewhere. Signed, so it
+    /// encodes chain direction rather than mere adjacency.
+    public static func canonicalPolymerOrdering(_ ordering: MLXArray) -> MLXArray {
+        ordering.asType(.float32).expandedDimensions(axis: -1)
+    }
+
     /// A zero block standing in for a feature that is inert in this regime.
     ///
     /// Explicit rather than implicit: the concatenation must still be the right

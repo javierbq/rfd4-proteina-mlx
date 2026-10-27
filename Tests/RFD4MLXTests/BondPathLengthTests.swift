@@ -15,8 +15,12 @@ import Testing
 @Suite("bond path lengths")
 struct BondPathLengthTests {
 
+    /// A synthetic structure with every residue of chain A present, 1...500.
     static func layout(_ contig: String, draw: Int = 10) throws -> TokenLayout {
-        try TokenLayout.make(contig: contig, draw: { lo, hi in lo == hi ? lo : draw })
+        try TokenLayout.make(
+            contig: contig,
+            residuesInChain: { $0 == "A" ? Array(1 ... 500) : [] },
+            draw: { lo, hi in lo == hi ? lo : draw })
     }
 
     /// `"Connected paths beyond the cutoff get overflow; disconnected pairs remain
@@ -166,6 +170,57 @@ struct BondPathLengthTests {
         }
         let good = DesignProblem(layout: contiguous, coords: fine, knownSequence: known)
         #expect(throws: Never.self) { try good.validate() }
+    }
+
+    /// A preserved segment is as long as the residues that exist, not as its range.
+    ///
+    /// Upstream selects `chain_id == c & start <= res_id <= end` and counts what it
+    /// finds (`contig_spec.py:_build_run_preserved_atoms`). Crystal structures have
+    /// unmodelled loops as a matter of course, so `end - start + 1` is the wrong
+    /// length for an ordinary input — and wrong silently: the surplus tokens carry no
+    /// atoms, so they enter the batch with an all-zero atom37 mask, NaN coordinates
+    /// and NaN sequence probabilities, shifting the chain break and every
+    /// conditioning array after them.
+    @Test("a segment is the residues present, not the span of its range")
+    func unmodelledLoop() throws {
+        // Chain A runs 17-131 but residues 50-55 were never modelled.
+        let present = Array(17 ... 49) + Array(56 ... 131)
+        let source: (String) -> [Int] = { $0 == "A" ? present : [] }
+
+        let layout = try TokenLayout.make(
+            contig: "20, /0, A17-131", residuesInChain: source, draw: { lo, _ in lo })
+        #expect(layout.count == 20 + present.count, "ghost tokens for the unmodelled loop")
+        #expect(layout.count == 129, "20 designed + 109 present, not 20 + 115")
+        #expect(layout.chainBreaks() == [20])
+
+        // And every preserved token points at a residue that is really there — the
+        // arithmetic `start + offset` form would aim everything past the hole six
+        // residues short, which no count check would catch.
+        let preserved = layout.tokens.compactMap(\.inputResidue)
+        #expect(preserved == present)
+        #expect(!preserved.contains(50), "token points at an unmodelled residue")
+        #expect(preserved.contains(49) && preserved.contains(56))
+
+        // Asking for residues the chain does not have at all is a typo, and upstream
+        // raises rather than clipping.
+        #expect(throws: ContigError.self) {
+            try TokenLayout.make(contig: "A17-200", residuesInChain: source,
+                                 draw: { lo, _ in lo })
+        }
+        #expect(throws: ContigError.self) {
+            try TokenLayout.make(contig: "A1-30", residuesInChain: source,
+                                 draw: { lo, _ in lo })
+        }
+        // A range entirely inside the hole matches nothing.
+        #expect(throws: ContigError.self) {
+            try TokenLayout.make(contig: "A50-55", residuesInChain: source,
+                                 draw: { lo, _ in lo })
+        }
+        // A chain the file does not contain.
+        #expect(throws: ContigError.self) {
+            try TokenLayout.make(contig: "B17-30", residuesInChain: source,
+                                 draw: { lo, _ in lo })
+        }
     }
 
     /// A designed token has no coordinates, so it cannot be validated — and must not

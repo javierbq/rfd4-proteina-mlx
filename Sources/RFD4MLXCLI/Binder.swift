@@ -34,32 +34,53 @@ enum BinderCommand {
         let target = try AtomArray.fromMMCIF(contentsOf: URL(fileURLWithPath: o.target))
         print("target: \(target.count) atoms from \(o.target)")
 
-        // One token per target residue, in file order.
-        var residueOrder: [Int] = []
-        var residueName: [Int: String] = [:]
-        var atomsByResidue: [Int: [(slot: Int, name: String, coord: Vec3)]] = [:]
+        // Atoms indexed by (chain, residue). The chain belongs in the key: upstream
+        // selects `chain_id == c & start <= res_id <= end`, and a multi-chain input
+        // routinely numbers two chains over the same range, so dropping the chain
+        // merges residues from a chain the contig never asked for.
+        struct ResidueKey: Hashable { let chain: String; let residue: Int }
+        var residueName: [ResidueKey: String] = [:]
+        var atomsByResidue: [ResidueKey: [(slot: Int, name: String, coord: Vec3)]] = [:]
+        var residuesByChain: [String: Set<Int>] = [:]
         let slots = target.atom37Slots(vocab)
         for i in target.indices {
             guard let rid = target.resID?[i], rid >= 0 else { continue }
             let slot = slots[i]
             guard slot >= 0 else { continue }
-            if residueName[rid] == nil {
-                residueName[rid] = target.resName[i]
-                residueOrder.append(rid)
+            let chain = target.chainID?[i] ?? ""
+            let key = ResidueKey(chain: chain, residue: rid)
+            if residueName[key] == nil {
+                residueName[key] = target.resName[i]
+                residuesByChain[chain, default: []].insert(rid)
             }
-            atomsByResidue[rid, default: []]
+            atomsByResidue[key, default: []]
                 .append((slot, target.atomName[i].trimmingCharacters(in: .whitespaces),
                          target.coord[i]))
         }
-        print("target residues: \(residueOrder.count) "
-              + "(\(residueOrder.first ?? -1)…\(residueOrder.last ?? -1))")
+        for chain in residuesByChain.keys.sorted() {
+            let present = residuesByChain[chain]!.sorted()
+            let span = (present.last ?? 0) - (present.first ?? 0) + 1
+            let gaps = span - present.count
+            print("target chain \(chain): \(present.count) residues "
+                  + "(\(present.first ?? -1)…\(present.last ?? -1))"
+                  + (gaps > 0 ? "  — \(gaps) unmodelled" : ""))
+        }
 
-        // The layout. A draw is supplied rather than left implicit, so the run is
-        // reproducible and the design length is reported rather than discovered.
+        // The layout. Preserved segments resolve against the residues the file
+        // actually contains, not against the arithmetic span of the range: an
+        // unmodelled loop makes a segment shorter than `end - start + 1`, and
+        // assuming otherwise inserts atom-less ghost tokens that shift the chain
+        // break and every conditioning array after them.
+        //
+        // The draw is supplied rather than left implicit, so the run is reproducible
+        // and the design length is reported rather than discovered.
         var rng = SplitMix64(seed: o.seed)
-        let layout = try TokenLayout.make(contig: o.contig, draw: { lo, hi in
-            o.designLength ?? (lo == hi ? lo : lo + Int(rng.next() % UInt64(hi - lo + 1)))
-        })
+        let layout = try TokenLayout.make(
+            contig: o.contig,
+            residuesInChain: { residuesByChain[$0].map(Array.init) ?? [] },
+            draw: { lo, hi in
+                o.designLength ?? (lo == hi ? lo : lo + Int(rng.next() % UInt64(hi - lo + 1)))
+            })
         let designed = layout.designedMask().filter { $0 }.count
         print("layout: \(layout.count) tokens — \(designed) designed, "
               + "\(layout.count - designed) target, breaks at \(layout.chainBreaks())")
@@ -72,8 +93,14 @@ enum BinderCommand {
         var knownSequence = [Int?](repeating: nil, count: layout.count)
         let wanted = Set(o.hotspots.map { "\($0.chain)/\($0.residue)/\($0.atom)" })
 
+        // A preserved token's run takes its id from the preserved segment itself, so
+        // `token.chainID` is the INPUT chain for exactly the tokens that have an
+        // input residue — which is every token this loop acts on.
+        var unknownResidues: [String: Int] = [:]
         for (t, token) in layout.tokens.enumerated() {
-            guard let rid = token.inputResidue, let atoms = atomsByResidue[rid] else { continue }
+            guard let rid = token.inputResidue else { continue }
+            let key = ResidueKey(chain: token.chainID, residue: rid)
+            guard let atoms = atomsByResidue[key] else { continue }
             for atom in atoms {
                 coords[t][atom.slot] = atom.coord
                 if o.backboneAtoms.contains(atom.name) { backbone.append((t, atom.slot)) }
@@ -81,10 +108,21 @@ enum BinderCommand {
                     hotspots.append((t, atom.slot))
                 }
             }
-            if let name = residueName[rid],
-               let channel = DesignProblem.sequenceProbabilityChannels.firstIndex(of: name) {
+            guard let name = residueName[key] else { continue }
+            if let channel = DesignProblem.sequenceProbabilityChannels.firstIndex(of: name) {
                 knownSequence[t] = channel
+            } else {
+                // A residue outside the 28 channels — a modified residue such as MSE,
+                // or UNK. Its sequence is simply not given; saying so beats leaving
+                // the user to wonder why the conditioning count is short.
+                unknownResidues[name, default: 0] += 1
             }
+        }
+        if !unknownResidues.isEmpty {
+            let listed = unknownResidues.sorted { $0.key < $1.key }
+                .map { "\($0.key)×\($0.value)" }.joined(separator: ", ")
+            print("note: \(listed) are outside the 28 sequence-probability channels; "
+                  + "their sequence is left unspecified")
         }
         print("conditioning: \(backbone.count) backbone atoms in one rigid group, "
               + "\(hotspots.count) hotspot atoms, "

@@ -66,9 +66,14 @@ public enum Contig {
 
     private static let lengthRangeChars = Set("0123456789-")
 
+    /// `atomworks.constants.MASKED`, reserved to mark an already-realized sentinel.
+    static let maskedSentinel = "<M>"
+
     /// Classify and parse one token, by shape.
     public static func parseToken(_ raw: String) throws -> Token {
-        let token = raw.trimmingCharacters(in: .whitespaces)
+        // `.whitespaces` excludes newlines; Python's `str.strip()` does not. A contig
+        // written across lines in a YAML block arrives with them attached.
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { throw ContigError.emptyToken }
         if token == "/0" { return .chainBreak }
 
@@ -78,8 +83,12 @@ public enum Contig {
         if let colon = token.firstIndex(of: ":") {
             let name = String(token[token.startIndex ..< colon])
             guard !name.isEmpty else { throw ContigError.malformedExpandable(token) }
-            // Upstream reserves this string to mark an already-realized sentinel.
-            guard name != "MASKED" else { throw ContigError.reservedSegmentName(token) }
+            // `atomworks.constants.MASKED` is the literal "<M>", not the word
+            // MASKED. Checking for the word gets it exactly backwards: it admits
+            // the sentinel upstream rejects and rejects a name upstream allows.
+            guard name != Self.maskedSentinel else {
+                throw ContigError.reservedSegmentName(token)
+            }
             let body = String(token[token.index(after: colon)...])
             let (lo, hi, type) = try parseLengthAndSuffix(body, token)
             return .expandable(ExpandableSegment(name: name, min: lo, max: hi, chainType: type))
@@ -265,9 +274,15 @@ public enum Contig {
         public let chainID: String
         /// Which output chain this belongs to, counting from 0 in contig order.
         public let chainIndex: Int
+        /// The input residue numbers this segment preserves, ascending.
+        /// Empty for a designed segment.
+        public let residues: [Int]
+        /// How many tokens this segment contributes.
         public let length: Int
-        /// `nil` for a designed segment; the input range for a preserved one.
+        /// `nil` for a designed segment; the requested input range for a preserved one.
         public let preserved: PreservedSegment?
+        /// An explicit `P`/`R`/`D` suffix on a designed segment, if it carried one.
+        public let chainType: SegmentChainType?
         public var isDesigned: Bool { preserved == nil }
     }
 
@@ -276,8 +291,23 @@ public enum Contig {
     /// An expandable segment's length is **drawn**, so two runs of the same contig are
     /// two different problems. The draw is explicit here rather than implicit in a
     /// global generator, so a design can be reproduced.
+    ///
+    /// A preserved segment's length is **not** `end - start + 1`. Upstream selects
+    /// `chain_id == c and start <= res_id <= end` from the real structure and counts
+    /// the residues that are actually there, so an unmodelled loop — which is the norm
+    /// in a crystal structure, not the exception — makes the segment shorter than its
+    /// range. Computing the length arithmetically instead inserts ghost tokens that
+    /// carry no atoms: an all-zero atom37 mask, NaN coordinates and NaN sequence
+    /// probabilities, shifting the chain break and every conditioning array after
+    /// them, with nothing to indicate it happened.
+    ///
+    /// - Parameter residuesInChain: the residue numbers present in a given input
+    ///   chain, in any order. This is the structure talking; there is deliberately no
+    ///   overload that guesses, because guessing is the defect.
     public static func realize(
-        _ contig: String, draw: (Int, Int) -> Int
+        _ contig: String,
+        residuesInChain: (String) -> [Int],
+        draw: (Int, Int) -> Int
     ) throws -> [RealizedSegment] {
         var out: [RealizedSegment] = []
         for (index, run) in try chainRuns(contig).enumerated() {
@@ -285,14 +315,33 @@ public enum Contig {
                 switch token {
                 case .chainBreak:
                     continue
+
                 case .preserved(let p):
-                    out.append(RealizedSegment(chainID: run.chainID, chainIndex: index,
-                                               length: p.length, preserved: p))
+                    let available = residuesInChain(p.chainID)
+                    guard let lo = available.min(), let hi = available.max() else {
+                        throw ContigError.segmentMatchedNothing(p)
+                    }
+                    // Upstream raises for a range running off either end of the
+                    // chain, calling it a typo rather than silently clipping.
+                    guard p.start >= lo, p.end <= hi else {
+                        throw ContigError.segmentOutsideChain(p, chainRange: lo ... hi)
+                    }
+                    let kept = available.filter { $0 >= p.start && $0 <= p.end }.sorted()
+                    guard !kept.isEmpty else { throw ContigError.segmentMatchedNothing(p) }
+                    out.append(RealizedSegment(
+                        chainID: run.chainID, chainIndex: index,
+                        residues: kept, length: kept.count, preserved: p,
+                        chainType: nil))
+
                 case .expandable(let e):
                     let n = e.isFixedLength ? e.min : draw(e.min, e.max)
-                    precondition(n >= e.min && n <= e.max, "draw returned \(n) outside \(e.min)...\(e.max)")
-                    out.append(RealizedSegment(chainID: run.chainID, chainIndex: index,
-                                               length: n, preserved: nil))
+                    guard n >= e.min, n <= e.max else {
+                        throw ContigError.drawOutOfRange(e, drawn: n)
+                    }
+                    out.append(RealizedSegment(
+                        chainID: run.chainID, chainIndex: index,
+                        residues: [], length: n, preserved: nil,
+                        chainType: e.chainType))
                 }
             }
         }
@@ -312,6 +361,9 @@ public enum ContigError: Error, Equatable, CustomStringConvertible {
     case duplicateOutputChain(String)
     case overlappingPreserved(String, Contig.PreservedSegment, Contig.PreservedSegment)
     case chainIDsExhausted
+    case segmentMatchedNothing(Contig.PreservedSegment)
+    case segmentOutsideChain(Contig.PreservedSegment, chainRange: ClosedRange<Int>)
+    case drawOutOfRange(Contig.ExpandableSegment, drawn: Int)
 
     public var description: String {
         switch self {
@@ -344,6 +396,18 @@ public enum ContigError: Error, Equatable, CustomStringConvertible {
                 """
         case .chainIDsExhausted:
             return "Ran out of synthetic chain ids."
+        case .segmentMatchedNothing(let p):
+            return """
+                Preserved segment '\(p.chainID)\(p.start)-\(p.end)' matched no atoms \
+                in the input structure.
+                """
+        case .segmentOutsideChain(let p, let range):
+            return """
+                Preserved segment '\(p.chainID)\(p.start)-\(p.end)' runs outside chain \
+                \(p.chainID), whose residues are \(range.lowerBound)-\(range.upperBound).
+                """
+        case .drawOutOfRange(let e, let n):
+            return "Design-length draw returned \(n), outside \(e.min)...\(e.max)."
         }
     }
 }

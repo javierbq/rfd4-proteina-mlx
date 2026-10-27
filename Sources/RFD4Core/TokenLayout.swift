@@ -43,6 +43,11 @@ public struct TokenLayout: Equatable, Sendable {
     }
 
     /// Expand a realized contig into one token per residue.
+    ///
+    /// A preserved token's `inputResidue` is read off the residues the segment
+    /// actually resolved to, never computed as `start + offset`: a chain with an
+    /// unmodelled loop numbers its residues with a hole in it, and the arithmetic
+    /// form would point every token after the hole at the wrong residue.
     public init(_ segments: [Contig.RealizedSegment], pathLengthCap: Int = 65) {
         var tokens: [Token] = []
         for (segmentIndex, segment) in segments.enumerated() {
@@ -51,17 +56,33 @@ public struct TokenLayout: Equatable, Sendable {
                     chainIndex: segment.chainIndex,
                     chainID: segment.chainID,
                     segmentIndex: segmentIndex,
-                    inputResidue: segment.preserved.map { $0.start + offset }))
+                    inputResidue: segment.isDesigned ? nil : segment.residues[offset]))
             }
         }
         self.init(tokens: tokens, pathLengthCap: pathLengthCap)
     }
 
-    /// Build from a contig string, drawing each expandable segment's length.
+    /// Build from a contig string, resolving preserved segments against the structure.
+    ///
+    /// - Parameter residuesInChain: the residue numbers present in a given input
+    ///   chain. See `Contig.realize` for why this is required rather than inferred.
     public static func make(
-        contig: String, draw: (Int, Int) -> Int, pathLengthCap: Int = 65
+        contig: String,
+        residuesInChain: (String) -> [Int],
+        draw: (Int, Int) -> Int,
+        pathLengthCap: Int = 65
     ) throws -> TokenLayout {
-        TokenLayout(try Contig.realize(contig, draw: draw), pathLengthCap: pathLengthCap)
+        let segments = try Contig.realize(contig, residuesInChain: residuesInChain, draw: draw)
+        // The grammar accepts `R` and `D` suffixes; this port does not. Every token
+        // it builds is `TokenType.PROTEIN`, so an RNA or DNA segment would be
+        // silently designed as a peptide — a wrong answer rather than a refusal.
+        // Parsing the suffix and then discarding it is what makes that possible, so
+        // the refusal belongs here, where the protein assumption is actually made.
+        for segment in segments {
+            guard let type = segment.chainType, type != .polypeptide else { continue }
+            throw TokenLayoutError.unsupportedChainType(type)
+        }
+        return TokenLayout(segments, pathLengthCap: pathLengthCap)
     }
 
     // MARK: - connectivity
@@ -126,6 +147,22 @@ public struct TokenLayout: Equatable, Sendable {
 
     /// `true` for each token that belongs to a designed segment.
     public func designedMask() -> [Bool] { tokens.map(\.isDesigned) }
+}
+
+public enum TokenLayoutError: Error, Equatable, CustomStringConvertible {
+    case unsupportedChainType(Contig.SegmentChainType)
+
+    public var description: String {
+        switch self {
+        case .unsupportedChainType(let t):
+            let name = t == .rna ? "RNA" : "DNA"
+            return """
+                Contig asks for a \(name) segment (suffix '\(t.rawValue)'). This port \
+                builds protein tokens only — the full 147-class vocabulary is not \
+                ported yet, so a nucleic-acid segment would be designed as a peptide.
+                """
+        }
+    }
 }
 
 /// The `C_CRDGRP` contract: which atom37 slots carry coordinate conditioning, and

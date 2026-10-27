@@ -68,7 +68,13 @@ struct BinderLayoutTests {
         // The contig's expandable segment is 50-120; upstream's draw with seed 0 gave
         // 110, so the fixture is that problem. Pinning the draw here is what makes
         // the comparison a comparison.
-        try! TokenLayout.make(contig: "50-120, /0, A17-131", draw: { _, _ in 110 })
+        // The target chain is residues 17-131 with nothing unmodelled, which is why
+        // this fixture's segment is its full arithmetic span; the residue source is
+        // supplied rather than assumed because a chain with a gap would not be.
+        try! TokenLayout.make(
+            contig: "50-120, /0, A17-131",
+            residuesInChain: { $0 == "A" ? Array(17 ... 131) : [] },
+            draw: { _, _ in 110 })
     }
 
     // MARK: - contig
@@ -124,6 +130,39 @@ struct BinderLayoutTests {
         #expect(runs[1].chainID != "A")
         // Both segments of that run land on the one new chain.
         #expect(runs[1].tokens.count == 2)
+    }
+
+    /// Three details measured against upstream rather than inferred from its prose.
+    @Test("the sentinel, whitespace and chain-type suffixes follow upstream")
+    func upstreamDetails() throws {
+        // `atomworks.constants.MASKED` is the literal "<M>". Checking for the word
+        // "MASKED" gets it exactly backwards — it admits the sentinel upstream
+        // rejects and rejects a name upstream allows.
+        #expect(throws: ContigError.self) { try Contig.parseToken("<M>:5-8") }
+        #expect(try Contig.parseToken("MASKED:5-8")
+                == .expandable(Contig.ExpandableSegment(name: "MASKED", min: 5, max: 8)))
+
+        // Python's str.strip() takes newlines; Swift's .whitespaces does not, and a
+        // contig written across lines in a YAML block carries them.
+        #expect(try Contig.parseToken("\n  A1-10 \t\r\n")
+                == .preserved(Contig.PreservedSegment(chainID: "A", start: 1, end: 10)))
+        let multiline = try Contig.parse("50-120,\n  /0,\n  A17-131")
+        #expect(multiline.count == 3)
+
+        // The grammar accepts R and D; this port builds protein tokens only, so it
+        // must refuse rather than design a peptide and call it RNA.
+        let source: (String) -> [Int] = { $0 == "A" ? Array(1 ... 200) : [] }
+        #expect(throws: TokenLayoutError.self) {
+            try TokenLayout.make(contig: "A1-10, /0, X1:5R",
+                                 residuesInChain: source, draw: { lo, _ in lo })
+        }
+        #expect(throws: TokenLayoutError.self) {
+            try TokenLayout.make(contig: "10D", residuesInChain: source, draw: { lo, _ in lo })
+        }
+        // An explicit P suffix is the thing it already does, so it passes.
+        #expect(throws: Never.self) {
+            try TokenLayout.make(contig: "10P", residuesInChain: source, draw: { lo, _ in lo })
+        }
     }
 
     @Test("malformed contigs are rejected rather than half-read")

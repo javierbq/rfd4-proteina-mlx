@@ -113,6 +113,17 @@ public struct Featurizer {
     let seqFactory: Features.Factory
     let seqTokenType: Features.Embedding
     let condFactory: Features.Factory
+    /// Two plain SwiGLU transitions applied to the conditioning before the trunk
+    /// ever sees it (`local_latents_transformer.py:_forward_impl`):
+    ///
+    ///     c = cond_factory(...)
+    ///     c = transition_c_2(transition_c_1(c, seq_mask), seq_mask)
+    ///
+    /// Easy to miss because they sit in the forward method rather than in the
+    /// factory, and omitting them leaves `cond` wrong by a factor of several while
+    /// the factory itself still passes parity.
+    let transitionC1: Transition
+    let transitionC2: Transition
     let fold: Features.FoldEmbedding
     let pairFactory: Features.Factory
     let pairCondFactory: Features.Factory
@@ -132,6 +143,8 @@ public struct Featurizer {
         seqTokenType = try Features.Embedding(
             root.scoped("init_repr_factory.feat_creators.2.embedding"))
         condFactory = try Features.Factory(root.scoped("cond_factory"))
+        transitionC1 = try Transition(root.scoped("transition_c_1"))
+        transitionC2 = try Transition(root.scoped("transition_c_2"))
         fold = try Features.FoldEmbedding(root.scoped("cond_factory.feat_creators.2"))
         pairFactory = try Features.Factory(root.scoped("pair_repr_builder.init_repr_factory"))
         pairCondFactory = try Features.Factory(root.scoped("pair_repr_builder.cond_factory"))
@@ -179,7 +192,8 @@ public struct Featurizer {
             default: parts.append(Features.inert([bs, n, slot.width]))
             }
         }
-        return condFactory(parts)
+        let c = condFactory(parts)
+        return transitionC2(transitionC1(c, mask: b.paddingMask), mask: b.paddingMask)
     }
 
     /// `pair_repr_builder` → `[b, n, n, pairDim]`.

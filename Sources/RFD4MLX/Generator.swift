@@ -125,6 +125,7 @@ public struct Generator {
         _ system: System,
         strategy: ReleasedRecycleStrategy = .thinkingMedium,
         seed: UInt64 = 0,
+        stochastic: Bool = true,
         onStep: ((Int, Int) -> Void)? = nil
     ) throws -> Result {
         let nsteps = ReleasedRecycleStrategy.nsteps
@@ -153,7 +154,7 @@ public struct Generator {
                 pass += max(1, depth)
                 return ["bb_ca": out.bbCA, "local_latents": out.localLatents]
             },
-            noiseFor: { _, _, shape in MLXRandom.normal(shape) },
+            noiseFor: { _, _, shape in stochastic ? MLXRandom.normal(shape) : nil },
             onStep: { step, x in
                 if ProcessInfo.processInfo.environment["RFD4_TRACE"] != nil,
                    step % 10 == 0 || step == nsteps - 1 {

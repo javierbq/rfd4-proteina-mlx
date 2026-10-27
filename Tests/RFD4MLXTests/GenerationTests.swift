@@ -29,7 +29,9 @@ struct GenerationTests {
 
         let started = Date()
         var trace: [(Int, Float)] = []
-        let result = try gen.generate(system, strategy: .thinkingLow, seed: 1) { step, _ in
+        let stochastic = ProcessInfo.processInfo.environment["RFD4_ODE"] == nil
+        let result = try gen.generate(system, strategy: .thinkingLow, seed: 1,
+                                      stochastic: stochastic) { step, _ in
             if step % 10 == 0 { trace.append((step, 0)) }
         }
         let seconds = Date().timeIntervalSince(started)
@@ -60,27 +62,28 @@ struct GenerationTests {
                      n, seconds, mean, minD, maxD,
                      Int(result.atomMask.asType(.float32).sum().item(Float.self))))
 
-        // KNOWN DEFECT — the generated chain collapses toward the origin.
+        // KNOWN DEFECT — the trajectory expands where upstream contracts.
         //
-        // Real CA-CA spacing is ~3.8 A. Traced over a run, Rg falls monotonically:
-        //   step  0   Rg 0.850 nm   CA-CA 1.171 nm
-        //   step 10   Rg 0.506 nm   CA-CA 0.610 nm
-        //   step 20   Rg 0.037 nm   CA-CA 0.051 nm
-        //   step 59   Rg 0.005 nm   CA-CA 0.006 nm
+        // Fixed since first observed: the chain no longer collapses to a point.
+        // That was two missing transition layers on the conditioning, and with
+        // them the predicted vector field matches upstream to 3e-06 at every
+        // sampled time (see PredictStepTests).
         //
-        // So it starts at a plausible scale and is driven to a point. What is
-        // already ruled out: the integration step is bit-exact against upstream
-        // across all six branches, the trunk and every feature factory are at
-        // parity, and nothing diverges or goes NaN. That leaves the batch this
-        // port synthesises for a de-novo request, or the per-step wiring between
-        // the pieces — neither of which the existing parity tests cover, because
-        // they all check a SINGLE call against a captured input.
+        // What remains is a dynamics difference, same batch, same length:
         //
-        // The decisive next test is to run upstream's own full_simulation on this
-        // same synthetic batch: if it collapses too, the batch is wrong; if it
-        // produces a protein, the wiring is.
-        withKnownIssue("generated chain collapses to a point; see trace above") {
-            #expect(mean > 0.5, "CA trace collapsed")
+        //   upstream   step 0  Rg 1.458 nm    step 59  Rg 0.856 nm   (contracts)
+        //   this port  step 0  Rg 1.521 nm    step 59  Rg 2.784 nm   (expands)
+        //
+        // The initial states agree, so it is not the noise draw's scale —
+        // MLXRandom.normal measures mean 0.0009, sd 0.9983. v is at parity, the
+        // integration step is bit-exact across all six branches, and the schedules
+        // are bit-exact. The two runs also used different recycle depths, which is
+        // not a fair comparison and is the first thing to eliminate.
+        //
+        // Next: drive both from an identical noise sequence and the same depth, so
+        // the trajectories are directly comparable rather than two draws.
+        withKnownIssue("trajectory expands where upstream contracts") {
+            #expect(mean > 2.0 && mean < 6.0, "CA-CA \(mean) A is outside protein range")
         }
 
         // Every emitted residue must carry its reference atom.

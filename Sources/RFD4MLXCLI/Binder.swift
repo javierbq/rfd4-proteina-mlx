@@ -123,7 +123,8 @@ enum BinderCommand {
 
         let chains = layout.chainRanges()
         try writeComplex(result, layout: layout, vocab: vocab, to: o.out)
-        report(result, chains: chains, elapsed: elapsed, strategy: o.strategy)
+        report(result, chains: chains, elapsed: elapsed, strategy: o.strategy,
+               hotspotTokens: Set(hotspots.map(\.token)))
         print("wrote \(o.out)")
     }
 
@@ -163,7 +164,7 @@ enum BinderCommand {
     /// Per-chain geometry, as a sanity line rather than a quality claim.
     private static func report(
         _ result: Generator.Result, chains: [Range<Int>], elapsed: TimeInterval,
-        strategy: ReleasedRecycleStrategy
+        strategy: ReleasedRecycleStrategy, hotspotTokens: Set<Int>
     ) {
         print(String(format: "generated in %.1fs (%@)", elapsed, strategy.rawValue))
         let ca = result.xFinal["bb_ca"]![0]
@@ -182,16 +183,34 @@ enum BinderCommand {
         }
         // How far apart the two chains sit: a design that ignored the target would
         // drift away from it entirely.
-        if chains.count == 2 {
-            let a = ca[chains[0].lowerBound ..< chains[0].upperBound]
-            let b = ca[chains[1].lowerBound ..< chains[1].upperBound]
-            let diff = a.expandedDimensions(axis: 1) - b.expandedDimensions(axis: 0)
-            let dist = MLX.sqrt(MLX.sum(diff * diff, axis: -1)) * 10
-            print(String(format: "  interface: closest CA-CA %.2f A, %d pairs within 10 A",
-                         dist.min().item(Float.self),
-                         MLX.sum((dist .< 10).asType(.int32)).item(Int32.self)))
+        guard chains.count == 2 else { return }
+        let a = ca[chains[0].lowerBound ..< chains[0].upperBound]
+        let b = ca[chains[1].lowerBound ..< chains[1].upperBound]
+        let diff = a.expandedDimensions(axis: 1) - b.expandedDimensions(axis: 0)
+        let dist = MLX.sqrt(MLX.sum(diff * diff, axis: -1)) * 10
+        print(String(format: "  interface: closest CA-CA %.2f A, %d pairs within 10 A",
+                     dist.min().item(Float.self),
+                     MLX.sum((dist .< 10).asType(.int32)).item(Int32.self)))
+
+        // Did it engage the site it was told to? A binder that merely touches the
+        // target somewhere is not the same as one that found the hotspots, and the
+        // interface numbers above cannot tell the two apart. The comparison is
+        // against the rest of the target, so "close" means close *relative to* the
+        // residues it was not asked to engage.
+        guard !hotspotTokens.isEmpty else { return }
+        let target = chains[1]
+        var hot: [Float] = [], cold: [Float] = []
+        for t in target {
+            let d = dist[0..., t - target.lowerBound].min().item(Float.self)
+            if hotspotTokens.contains(t) { hot.append(d) } else { cold.append(d) }
         }
+        func median(_ v: [Float]) -> Float { v.sorted()[v.count / 2] }
+        print(String(format: "  hotspots: %d residues, closest CA %.1f A (median)  —  "
+                     + "rest of target %.1f A",
+                     hot.count, median(hot), median(cold)))
     }
+
+
 }
 
 enum CLIError: Error, CustomStringConvertible {

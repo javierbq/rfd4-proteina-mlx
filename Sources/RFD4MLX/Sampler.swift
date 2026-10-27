@@ -200,6 +200,17 @@ public enum Sampler {
                     gt: gts[stepIndex], params: p, emitMask: emit, noise: noise
                 )
             }
+            // Force the step before building the next one.
+            //
+            // MLX is lazy, so without this the whole trajectory accumulates as one
+            // graph and nothing runs until a caller pulls a value out at the end.
+            // Two things go wrong then, and the second is the dangerous one: a
+            // progress callback reports steps that have not been computed, and
+            // elapsed-time numbers measure graph construction rather than work —
+            // this is why a 225-token binder appeared to generate in 0.4 s. The
+            // graph also holds every intermediate of every step alive at once,
+            // which is exactly the wrong memory profile for a phone.
+            MLX.eval(modes.compactMap { x[$0] })
             onStep?(stepIndex, x)
         }
         return x

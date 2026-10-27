@@ -103,7 +103,8 @@ enum BinderCommand {
             layout: layout, coords: coords,
             internalGroups: [DesignProblem.CoordinateGroup(members: backbone)],
             hotspots: hotspots, knownSequence: knownSequence)
-        let system = problem.system(seed: o.seed)
+        // Refuse what upstream refuses, before spending 200 seconds on it.
+        let system = try problem.validatedSystem(seed: o.seed)
 
         let loadStart = Date()
         let generator = try Generator(weightsAt: URL(fileURLWithPath:

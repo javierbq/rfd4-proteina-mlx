@@ -96,20 +96,20 @@ public struct TokenLayout: Equatable, Sendable {
 
     /// Where one chain ends and the next begins, as token indices.
     public func chainBreaks() -> [Int] {
-        (1 ..< max(count, 1)).filter { tokens[$0].chainIndex != tokens[$0 - 1].chainIndex }
+        guard count > 1 else { return [] }
+        return (1 ..< count).filter { tokens[$0].chainIndex != tokens[$0 - 1].chainIndex }
     }
 
     /// Token ranges, one per output chain, in contig order.
+    ///
+    /// Written as "cut at each break" rather than as a scan with a trailing guard.
+    /// The scan form needs `1 ... max(count, 1)` to cover the final range, and that
+    /// upper bound is one past the end for an empty layout — a guard placed after
+    /// the loop never runs.
     public func chainRanges() -> [Range<Int>] {
-        var out: [Range<Int>] = []
-        var start = 0
-        for i in 1 ... max(count, 1) {
-            if i == count || tokens[i].chainIndex != tokens[start].chainIndex {
-                out.append(start ..< i)
-                start = i
-            }
-        }
-        return count == 0 ? [] : out
+        guard count > 0 else { return [] }
+        let cuts = [0] + chainBreaks() + [count]
+        return zip(cuts, cuts.dropFirst()).map { $0 ..< $1 }
     }
 
     // MARK: - grouping ids

@@ -90,6 +90,47 @@ public struct DesignProblem {
             ?? [Bool](repeating: true, count: layout.count)
     }
 
+    // MARK: - validation
+
+    /// Upstream's `ValidateBatchInvariants` polymerization limit, in Angstrom.
+    public static let polymerizationLimit: Float = 2.0
+
+    /// Reject a contig that would bond two residues the input does not join.
+    ///
+    /// Tokens inside one chain run are bonded consecutively — upstream renumbers each
+    /// run from 1 and infers a peptide bond between neighbours, which is why
+    /// `TokenLayout` can build connectivity from index alone. The consequence is that
+    /// `"A17-20, A30-33"` asks for a bond between residue 20 and residue 30, and
+    /// upstream refuses it:
+    ///
+    ///     [bond_length] A_1:THR4:C -- A_1:VAL5:N = 24.61 Å (limit 2.0 Å).
+    ///     Check source coordinates and residue numbering; preserve missing-residue
+    ///     gaps instead of bonding across them.
+    ///
+    /// Without this check the port accepts that contig and designs against a chain
+    /// with a 24 Å peptide bond in its connectivity — silently, since every feature
+    /// is well-formed and only the chemistry is impossible. The user wanted a `/0`.
+    public func validate() throws {
+        let slots = Vocabulary.slotCount
+        let (nitrogen, carbon) = (0, 2)                  // atom37: N, CA, C, CB, O
+        guard layout.count > 1 else { return }
+
+        for i in 1 ..< layout.count {
+            let (prev, here) = (layout.tokens[i - 1], layout.tokens[i])
+            // Only a pair the layout actually bonds, and only where the input gives
+            // both atoms — a designed token has no coordinates to check.
+            guard prev.chainIndex == here.chainIndex,
+                  let c = coords[i - 1][carbon], let n = coords[i][nitrogen] else { continue }
+            let d = ((c.x - n.x) * (c.x - n.x) + (c.y - n.y) * (c.y - n.y)
+                     + (c.z - n.z) * (c.z - n.z)).squareRoot()
+            guard d.isFinite, d > Self.polymerizationLimit else { continue }
+            throw DesignProblemError.impossibleBond(
+                token: i, chainID: here.chainID,
+                upstreamResidue: prev.inputResidue, downstreamResidue: here.inputResidue,
+                distance: d)
+        }
+    }
+
     // MARK: - assembly
 
     /// Build the static system and its conditioning payload.
@@ -205,6 +246,12 @@ public struct DesignProblem {
             conditioning: conditioning)
     }
 
+    /// Build the system, refusing a contig upstream would refuse.
+    public func validatedSystem(seed: UInt64 = 0) throws -> Generator.System {
+        try validate()
+        return system(seed: seed)
+    }
+
     /// A uniformly random rotation matrix, row-major, from four Gaussians.
     ///
     /// Shoemake's quaternion construction: a normalised 4-vector of independent
@@ -221,4 +268,26 @@ public struct DesignProblem {
             2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y),
         ]
     }
+}
+
+public enum DesignProblemError: Error, CustomStringConvertible {
+    /// A contig asked for a peptide bond the input's coordinates cannot support.
+    case impossibleBond(token: Int, chainID: String, upstreamResidue: Int?,
+                        downstreamResidue: Int?, distance: Float)
+
+    public var description: String {
+        switch self {
+        case .impossibleBond(let token, let chain, let up, let down, let d):
+            let pair = [up, down].compactMap { $0.map(String.init) }
+            let named = pair.count == 2 ? " (\(chain)\(pair[0]) → \(chain)\(pair[1]))" : ""
+            return String(
+                format: "contig bonds tokens %d and %d%@ at %.2f A, over the %.1f A "
+                + "polymerization limit — the input does not join these residues. "
+                + "Insert a `/0` to split them into separate chains, or use a contig "
+                + "that preserves the gap.",
+                token - 1, token, named, d, Self.limit)
+        }
+    }
+
+    private static let limit = DesignProblem.polymerizationLimit
 }

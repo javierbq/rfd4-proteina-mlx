@@ -174,6 +174,24 @@ struct BinderLayoutTests {
         #expect(throws: ContigError.self) { try Contig.chainRuns("A1-10, B1-10") }
         // The same input residue may not be claimed twice.
         #expect(throws: ContigError.self) { try Contig.chainRuns("A1-10, /0, A5-15") }
+
+        // A draw outside the segment's range. Every other draw closure in this suite
+        // is in range by construction, so without this the guard added for it could
+        // be replaced by a clamp — or by the trap it used to be — and nothing would
+        // notice.
+        let source: (String) -> [Int] = { $0 == "A" ? Array(1 ... 200) : [] }
+        #expect(throws: ContigError.self) {
+            try TokenLayout.make(contig: "50-120", residuesInChain: source,
+                                 draw: { _, hi in hi + 1 })
+        }
+        #expect(throws: ContigError.self) {
+            try TokenLayout.make(contig: "50-120", residuesInChain: source,
+                                 draw: { lo, _ in lo - 1 })
+        }
+        #expect(throws: Never.self) {
+            try TokenLayout.make(contig: "50-120", residuesInChain: source,
+                                 draw: { lo, hi in (lo + hi) / 2 })
+        }
     }
 
     // MARK: - layout against upstream's batch
@@ -244,8 +262,12 @@ struct BinderLayoutTests {
         }
     }
 
-    @Test("both chains are generated — the target is not frozen")
-    func emitMasks() throws {
+    /// Upstream's batch freezes nothing — asserted about the FIXTURE, which is where
+    /// the fact lives. The port's own masks are checked against this in
+    /// `BinderFeaturizerTests.emitMaskFormula`; this one would pass if they were
+    /// replaced by zeros, and its name once implied otherwise.
+    @Test("upstream's binder batch marks no token as context")
+    func upstreamFreezesNothing() throws {
         // `bb_ca` emits where padding_mask & ~is_in_context_conditioning, and upstream's
         // binder batch has that second array all false. The target is held in place by
         // its conditioning, not by a mask. A port that froze the target would be

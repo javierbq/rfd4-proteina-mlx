@@ -31,8 +31,14 @@ enum BinderCommand {
 
     static func run(_ o: Options) throws {
         let vocab = Vocabulary.unifiedAtom37
-        let target = try AtomArray.fromMMCIF(contentsOf: URL(fileURLWithPath: o.target))
-        print("target: \(target.count) atoms from \(o.target)")
+        let raw = try AtomArray.fromMMCIF(contentsOf: URL(fileURLWithPath: o.target))
+        // The two parse-time transforms upstream's design loader applies. Without
+        // them a selenomethionine residue vanishes from the chain and an alternate
+        // conformer is counted as a second atom; see `normalizedForDesign`.
+        let target = raw.normalizedForDesign()
+        print("target: \(target.count) atoms from \(o.target)"
+              + (target.count != raw.count
+                 ? "  (\(raw.count - target.count) alternate-conformer rows collapsed)" : ""))
 
         // Atoms indexed by (chain, residue). The chain belongs in the key: upstream
         // selects `chain_id == c & start <= res_id <= end`, and a multi-chain input
@@ -142,9 +148,16 @@ enum BinderCommand {
         guard !backbone.isEmpty else {
             throw CLIError.message("no target backbone atoms matched the contig's residues")
         }
-        guard hotspots.count == o.hotspots.count else {
+        // DISTINCT pairs, not matches. Counting matches lets a duplicate row make up
+        // for an atom that is genuinely absent: the guard reads 6 of 6 while only
+        // five slots are flagged, and the design runs against a hotspot set smaller
+        // than the one requested, reported as complete.
+        struct Flagged: Hashable { let token: Int; let slot: Int }
+        let distinctHotspots = Set(hotspots.map { Flagged(token: $0.token, slot: $0.slot) })
+        guard distinctHotspots.count == o.hotspots.count else {
             throw CLIError.message("""
-                matched \(hotspots.count) of \(o.hotspots.count) hotspot atoms — check the \
+                flagged \(distinctHotspots.count) distinct hotspot atoms of the \
+                \(o.hotspots.count) requested (\(hotspots.count) rows matched) — check the \
                 residue numbering of \(o.target)
                 """)
         }
@@ -255,10 +268,16 @@ enum BinderCommand {
             let d = dist[0..., t - target.lowerBound].min().item(Float.self)
             if hotspotTokens.contains(t) { hot.append(d) } else { cold.append(d) }
         }
-        func median(_ v: [Float]) -> Float { v.sorted()[v.count / 2] }
+        // A median over an empty slice traps. Unreachable from the CLI today, since
+        // the contig is fixed and puts the target second — but the contig is a
+        // settable option, and the cost of not trapping is one guard.
+        func median(_ v: [Float]) -> Float? { v.isEmpty ? nil : v.sorted()[v.count / 2] }
+        guard let hotMedian = median(hot), let coldMedian = median(cold) else {
+            print("  hotspots: none fall in the chain being reported")
+            return
+        }
         print(String(format: "  hotspots: %d residues, closest CA %.1f A (median)  —  "
-                     + "rest of target %.1f A",
-                     hot.count, median(hot), median(cold)))
+                     + "rest of target %.1f A", hot.count, hotMedian, coldMedian))
     }
 
 

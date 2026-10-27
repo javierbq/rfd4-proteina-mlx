@@ -35,6 +35,9 @@ public struct AtomArray: Sendable {
     public var resID: [Int]?
     public var occupancy: [Float]?
     public var bFactor: [Float]?
+    /// `label_alt_id`. A residue modelled in two conformations contributes two rows
+    /// per atom, and they must be collapsed before the atoms are binned into slots.
+    public var altLocID: [String]?
     public var chainType: [ChainType]?
 
     /// Explicit atomization. Takes effect only when `tokenType` is absent.

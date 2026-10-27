@@ -143,9 +143,18 @@ struct BinderFeaturizerTests {
         check(Features.hotspot(c.hotspot, atom37Mask: c.atom37Mask),
               try upstream("HotspotSeqFeat"), "HotspotSeqFeat")
         check(c.coordGroupsDensified, try upstream("CoordGroupSeqFeat"), "CoordGroupSeqFeat")
-        check(Features.conditionalAtom37Coords(try absoluteCoords()),
-              try upstream("ConditionalAtom37NanometersCoorsSeqFeat"),
-              "ConditionalAtom37NanometersCoorsSeqFeat")
+        // This recipe leaves the pose free, so BOTH sides of this comparison are
+        // identically zero and it cannot catch an error inside the feature — the
+        // scaling, the mask, the flattening. It is kept for what it does establish:
+        // that an all-NaN input produces an all-zero block of the right shape rather
+        // than NaNs, which would poison the whole concatenation. The feature's
+        // arithmetic is covered where that creator is live, in
+        // `ConditioningParityTests.conditionalCoords`.
+        let absoluteBlock = Features.conditionalAtom37Coords(try absoluteCoords())
+        check(absoluteBlock, try upstream("ConditionalAtom37NanometersCoorsSeqFeat"),
+              "ConditionalAtom37NanometersCoorsSeqFeat (inert here — shape only)")
+        #expect(MLX.all(MLX.isFinite(absoluteBlock)).item(Bool.self),
+                "an all-NaN input produced NaNs rather than an inert zero block")
     }
 
     /// The emit masks are a formula, not the all-ones they currently evaluate to.
@@ -234,7 +243,16 @@ struct BinderFeaturizerTests {
         for t in 0 ..< layout.count {
             for s in 0 ..< slots {
                 let i = t * slots + s
-                if atom37[i] > 0 { coords[t][s] = Vec3(Float(t), Float(s), 0) }
+                // NOT coplanar. With z fixed at 0 every point lies in one plane, and
+                // a reflection through that plane preserves all of them — so the
+                // distance check below would pass for a mirrored target, which is the
+                // one error it exists to catch. `BinderAssemblyTests.rotationIsProper`
+                // checks the determinant directly; this makes the geometry able to
+                // see it too.
+                if atom37[i] > 0 {
+                    coords[t][s] = Vec3(Float(t) * 1.7, Float(s) * 0.9,
+                                        Float((t &* 13 &+ s &* 7) % 23) * 0.6)
+                }
                 if groups[i] > 0 { members.append((t, s)) }
                 if hotspot[i] > 0 { hots.append((t, s)) }
             }

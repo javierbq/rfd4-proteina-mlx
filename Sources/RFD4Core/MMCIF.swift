@@ -247,7 +247,14 @@ extension AtomArray {
         var array = AtomArray(resName: resName, atomName: atomName, coord: coords)
         array.element = file.column("atom_site", "type_symbol")
         array.chainID = file.column("atom_site", "label_asym_id")
+        // `label_seq_id`, NOT `auth_seq_id`, and the choice decides what a contig's
+        // residue numbers mean. Measured rather than assumed: parsing a CIF whose two
+        // columns deliberately disagree (label 1-3, auth 501-503) through atomworks
+        // gives res_id 1-3, so upstream reads the label numbering and so does this.
+        // They happen to agree in RFD4's own design inputs, which is exactly why the
+        // question has to be settled on a file where they do not.
         array.resID = file.column("atom_site", "label_seq_id")?.map { Int($0) ?? -1 }
+        array.altLocID = file.column("atom_site", "label_alt_id")
         array.occupancy = file.column("atom_site", "occupancy")?.map(f)
         array.bFactor = file.column("atom_site", "B_iso_or_equiv")?.map(f)
         return array

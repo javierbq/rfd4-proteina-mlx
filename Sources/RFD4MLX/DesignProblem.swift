@@ -113,6 +113,53 @@ public struct DesignProblem {
     public func validate() throws {
         let slots = Vocabulary.slotCount
         let (nitrogen, carbon) = (0, 2)                  // atom37: N, CA, C, CB, O
+
+        // Three states upstream cannot represent, each of which otherwise produces a
+        // completed run with wrong conditioning rather than an error.
+        //
+        // Membership upstream is a per-atom LABEL (`C_CRDGRP`), so an atom belongs to
+        // exactly one group and belongs to it once. Here it is a list, so both
+        // "twice in one group" and "in two groups" are expressible — and both change
+        // the centroid, which is the one invariant the internal-coordinate feature
+        // carries. A duplicate weights its atom twice; a shared atom gets the later
+        // group's label while the earlier group still rotates it into its own frame.
+        var owner: [Int: Int] = [:]
+        for (index, group) in internalGroups.enumerated() {
+            var seenHere = Set<Int>()
+            for m in group.members {
+                let key = m.token * slots + m.slot
+                if !seenHere.insert(key).inserted || owner[key] != nil {
+                    throw DesignProblemError.duplicateGroupMember(
+                        token: m.token, slot: m.slot,
+                        group: index + 1, alsoIn: (owner[key] ?? index) + 1)
+                }
+                owner[key] = index
+            }
+        }
+
+        for (token, slot) in absoluteAtoms {
+            let key = token * slots + slot
+            // `unindexing.py:542` asserts the two coordinate modes never overlap.
+            // They do here: the absolute label is written first and the internal id
+            // written over it, while the absolute payload stays — so both features
+            // fire on one atom, in two incompatible frames.
+            if let group = owner[key] {
+                throw DesignProblemError.overlappingCoordinateModes(
+                    token: token, slot: slot, group: group + 1)
+            }
+            // `conditioning_utils.py:306-310`: an absolute target must be entirely
+            // finite or entirely absent, and the group-0 label must agree with it
+            // exactly. A missing coordinate still labelled 0 is a conditioned atom
+            // with no condition; a half-NaN one is masked IN — `isFinite.any` — and
+            // emitted with a zero invented for the unknown axis.
+            guard let p = coords[token][slot] else {
+                throw DesignProblemError.absoluteCoordinateMissing(token: token, slot: slot)
+            }
+            guard p.x.isFinite, p.y.isFinite, p.z.isFinite else {
+                throw DesignProblemError.absoluteCoordinateMissing(token: token, slot: slot)
+            }
+        }
+
         guard layout.count > 1 else { return }
 
         for i in 1 ..< layout.count {
@@ -299,6 +346,12 @@ public enum DesignProblemError: Error, CustomStringConvertible {
     case incompleteCoordinateGroup(group: Int, members: Int, present: Int)
     /// A coordinate group named an atom whose coordinates are not finite.
     case nonFiniteCoordinateGroup(group: Int, token: Int, slot: Int)
+    /// One atom named twice in a group, or named by two groups.
+    case duplicateGroupMember(token: Int, slot: Int, group: Int, alsoIn: Int)
+    /// One atom conditioned both absolutely and internally.
+    case overlappingCoordinateModes(token: Int, slot: Int, group: Int)
+    /// An absolute atom with no coordinate, or a partly non-finite one.
+    case absoluteCoordinateMissing(token: Int, slot: Int)
 
     public var description: String {
         switch self {
@@ -320,6 +373,37 @@ public enum DesignProblemError: Error, CustomStringConvertible {
         case .nonFiniteCoordinateGroup(let g, let token, let slot):
             return """
                 coordinate group \(g) needs finite coordinates: token \(token), atom37                 slot \(slot) is not resolved. One NaN makes the group's centroid NaN                 and every coordinate in it NaN, which the feature then reads as the                 origin while still reporting the group as conditioned. Exclude                 unresolved atoms, as the shipped recipe does with `not has_nan_coord()`.
+                """
+
+        case .duplicateGroupMember(let token, let slot, let group, let alsoIn):
+            return group == alsoIn
+                ? """
+                    token \(token), atom37 slot \(slot) is named twice by coordinate \
+                    group \(group). Membership is a per-atom label upstream, so an atom \
+                    belongs to a group once; naming it twice weights it twice in the \
+                    centroid and the group is no longer centred on its own centroid.
+                    """
+                : """
+                    token \(token), atom37 slot \(slot) is named by coordinate groups \
+                    \(alsoIn) and \(group). An atom belongs to exactly one rigid group: \
+                    sharing it gives it the later group's label while the earlier group \
+                    still rotates it into a different frame.
+                    """
+
+        case .overlappingCoordinateModes(let token, let slot, let group):
+            return """
+                token \(token), atom37 slot \(slot) is conditioned both absolutely and \
+                by internal group \(group). The two modes are exclusive — upstream \
+                asserts it — and together they hand the model the same atom in two \
+                incompatible frames: pinned in space, and centred and rotated.
+                """
+
+        case .absoluteCoordinateMissing(let token, let slot):
+            return """
+                token \(token), atom37 slot \(slot) is listed as absolutely conditioned \
+                but its coordinate is absent or not entirely finite. An absolute target \
+                must be wholly finite or wholly absent: a partly-NaN one is masked in \
+                and emitted with a zero invented for the unknown axis.
                 """
         }
     }

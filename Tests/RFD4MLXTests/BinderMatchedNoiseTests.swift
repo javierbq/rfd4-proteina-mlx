@@ -193,6 +193,15 @@ struct BinderMatchedNoiseTests {
 
         print(String(format: "     worst single step: %d at max rel %.3e",
                      worstPerStep.step, worstPerStep.rel))
+        // Asserted, not merely printed. A fault that peaks mid-trajectory and relaxes
+        // by the endpoint passes an endpoint-only check: 3% at step 30 that decays to
+        // 1% by step 59 is invisible at 5e-2. This is the number that localises such a
+        // fault, and computing it and discarding it was worse than not computing it.
+        // The bound is tight because the measured worst step is 4.1e-06.
+        let worstDetail = String(format: "diverged mid-trajectory at step %d "
+                                 + "(max rel %.3e) even if it recovered by the end",
+                                 worstPerStep.step, worstPerStep.rel)
+        #expect(worstPerStep.rel <= 1e-3, "\(worstDetail)")
         for mode in ["bb_ca", "local_latents"] {
             let got = x[mode]!
             let want = try Self.entry(fx.xFinal[mode], "x_final.\(mode)")

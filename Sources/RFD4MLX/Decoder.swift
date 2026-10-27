@@ -18,6 +18,14 @@ public struct Decoder {
     public static let atomSlots = Vocabulary.slotCount   // 37
 
     let layers: [TrunkLayer]
+    /// The decoder's own feature factory. Four features, 214 wide:
+    /// CA position (3), the latent (32), a token-type embedding (32), and a
+    /// conditional residue type (147) that is inert without sequence conditioning.
+    ///
+    /// Its `cond_factory` carries NO parameters — it is a zero feature — so the
+    /// decoder's conditioning really is zeros, and only this one needs building.
+    let seqFactory: Features.Factory
+    let tokenTypeEmbedding: Features.Embedding
     let logitHead: LNHead
     let structHead: LNHead
     let presenceHead: LNHead
@@ -68,6 +76,9 @@ public struct Decoder {
             try TrunkLayer(root.scoped("transformer_layers", $0),
                            heads: heads, dimHead: dimHead, kind: .layer)
         }
+        seqFactory = try Features.Factory(root.scoped("init_repr_factory"), kind: .layer)
+        tokenTypeEmbedding = try Features.Embedding(
+            root.scoped("init_repr_factory.feat_creators.2.embedding"))
         logitHead = try LNHead(root.scoped("logit_linear"), eps: eps)
         structHead = try LNHead(root.scoped("struct_linear"), eps: eps)
         presenceHead = try LNHead(root.scoped("atom_presence_linear"), eps: eps)
@@ -80,6 +91,25 @@ public struct Decoder {
         residueAtomMask = MLXArray(
             atoms.flatMap { $0.map { $0 ? Float(1) : Float(0) } },
             [atoms.count, Vocabulary.slotCount])
+    }
+
+    /// Build the decoder's sequence representation from what the flow model
+    /// produced, so the decoder actually sees the design rather than zeros.
+    ///
+    /// - Parameters:
+    ///   - latents: `[b, n, 32]` the per-residue latent the sampler integrated
+    ///   - caCoordsNM: `[b, n, 3]` the generated CA positions
+    public func sequenceFeatures(
+        latents: MLXArray, caCoordsNM: MLXArray, tokenType: MLXArray
+    ) -> MLXArray {
+        let (b, n) = (latents.dim(0), latents.dim(1))
+        return seqFactory([
+            caCoordsNM,                          // CaCoorsNanometersSeqFeat
+            latents,                             // LatentVariableSeqFeat
+            tokenTypeEmbedding(tokenType),       // TokenTypeSeqFeat
+            // ConditionalResidueTypeSeqFeat — zero without sequence conditioning.
+            Features.inert([b, n, 147]),
+        ])
     }
 
     /// - Parameters:

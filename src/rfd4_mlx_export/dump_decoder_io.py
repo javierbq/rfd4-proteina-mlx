@@ -72,6 +72,7 @@ def main() -> int:
         "inputs": {
             **captured,
             "ca_coors_nm": entry(batch["ca_coors_nm"]),
+            "z_latent": entry(batch["z_latent"]),
             "emit_mask": entry(out_dict["emit_mask"].to(torch.float32)),
             "token_type": entry(batch["token_type"].to(torch.float32)),
         },

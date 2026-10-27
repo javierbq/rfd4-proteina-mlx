@@ -190,11 +190,17 @@ public struct Generator {
             }
         )
 
-        // The decoder reconstructs all-atom geometry from the final CA positions and
-        // latents. Its own feature factories are not ported, so for a de-novo protein
-        // the sequence representation it starts from is built here from the latents.
+        // Feed the decoder what the flow model actually produced. Passing zeros
+        // here yields a constant sequence — every residue the same class — which
+        // looks like a plausible structure file and is not one.
+        //
+        // The conditioning really is zeros: the decoder's cond_factory carries no
+        // parameters, so it is a zero feature by construction.
         let decoded = decoder(
-            seqInit: MLX.zeros([1, n, 768]),
+            seqInit: decoder.sequenceFeatures(
+                latents: xFinal["local_latents"]!,
+                caCoordsNM: xFinal["bb_ca"]!,
+                tokenType: system.tokenType),
             cond: MLX.zeros([1, n, 128]),
             attnMask: system.paddingMask,
             emitMask: system.emitBBCA,

@@ -113,3 +113,31 @@ struct DecoderParityTests {
         }
     }
 }
+
+extension DecoderParityTests {
+    /// The decoder's own featurization, which turns the flow model's output into
+    /// the representation its layers consume.
+    ///
+    /// Worth its own test because feeding this wrong is invisible: zeros here
+    /// produce a complete, well-formed structure file in which every residue is
+    /// the same class. That looks like a result and is not one.
+    @Test("the decoder's sequence features match upstream")
+    func decoderFeatures() throws {
+        let fx = try #require(Self.fixture)
+        guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
+            print("skip decoder features: set RFD4_WEIGHTS"); return
+        }
+        let decoder = try Decoder(
+            Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath)))
+
+        let got = decoder.sequenceFeatures(
+            latents: Self.array(try #require(fx.inputs["z_latent"])),
+            caCoordsNM: Self.array(try #require(fx.inputs["ca_coors_nm"])),
+            tokenType: Self.array(try #require(fx.inputs["token_type"])).asType(.int32))
+
+        // Upstream captures seq_init already multiplied by the attention mask.
+        let mask = Self.array(try #require(fx.inputs["attn_mask"]))
+            .expandedDimensions(axis: -1)
+        check(got * mask, Self.array(try #require(fx.inputs["seq_init"])), "decoder seq_init")
+    }
+}

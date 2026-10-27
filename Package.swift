@@ -43,6 +43,10 @@ let package = Package(
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ]
         ),
+        .executableTarget(
+            name: "RFD4MLXCLI",
+            dependencies: ["RFD4Core", "RFD4MLX"]
+        ),
         .testTarget(
             name: "RFD4CoreTests",
             dependencies: ["RFD4Core"],

@@ -229,14 +229,25 @@ public struct Generator {
         //
         // The conditioning really is zeros: the decoder's cond_factory carries no
         // parameters, so it is a zero feature by construction.
+        // `decoder.py:186` takes BOTH its masks from `compute_ae_masks`, which are
+        // the same two expressions the flow emit masks use:
+        //
+        //     attn_mask = padding & ~is_in_context_conditioning   == emitBBCA
+        //     emit_mask = attn_mask & supports_local_latent       == emitLocalLatents
+        //
+        // Passing `paddingMask` and `emitBBCA` here instead is identical for every
+        // run this port can currently produce — all three are all-ones for a de-novo
+        // monomer and for a binder — and one mask too permissive at each position
+        // the moment partial diffusion sets context or an atomized token clears
+        // supports_local_latent.
         let decoded = decoder(
             seqInit: decoder.sequenceFeatures(
                 latents: xFinal["local_latents"]!,
                 caCoordsNM: xFinal["bb_ca"]!,
                 tokenType: system.tokenType),
             cond: MLX.zeros([1, n, 128]),
-            attnMask: system.paddingMask,
-            emitMask: system.emitBBCA,
+            attnMask: system.emitBBCA,
+            emitMask: system.emitLocalLatents,
             caCoordsNM: xFinal["bb_ca"]!,
             tokenType: system.tokenType.asType(.int32))
 

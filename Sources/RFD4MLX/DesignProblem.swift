@@ -41,6 +41,16 @@ public struct DesignProblem {
     /// Residue class per token for the tokens whose sequence is known; `nil` elsewhere.
     /// Indices are into `sequenceProbabilityChannels`.
     public var knownSequence: [Int?]
+    /// `is_in_context_conditioning`: tokens that are context rather than generated
+    /// output. **All false for a binder** — upstream's own batch for the shipped
+    /// recipe has it empty, so the target is generated too and held in place by its
+    /// conditioning. It exists here because partial diffusion is what sets it, and
+    /// a silent all-ones emit mask would be wrong the moment that lands.
+    public var isContext: [Bool]
+    /// `supports_local_latent`: tokens the autoencoder's latent alphabet represents.
+    /// True for canonical polymer residues, which is the whole current scope; an
+    /// atomized token or a ligand would be false.
+    public var supportsLocalLatent: [Bool]
 
     /// The 28 sequence-probability channels, in `SEQUENCE_PROBABILITY_CONDITIONS`
     /// order: the 20 amino acids alphabetically, then RNA, then DNA.
@@ -65,7 +75,9 @@ public struct DesignProblem {
         internalGroups: [CoordinateGroup] = [],
         absoluteAtoms: [(token: Int, slot: Int)] = [],
         hotspots: [(token: Int, slot: Int)] = [],
-        knownSequence: [Int?]
+        knownSequence: [Int?],
+        isContext: [Bool]? = nil,
+        supportsLocalLatent: [Bool]? = nil
     ) {
         self.layout = layout
         self.coords = coords
@@ -73,6 +85,9 @@ public struct DesignProblem {
         self.absoluteAtoms = absoluteAtoms
         self.hotspots = hotspots
         self.knownSequence = knownSequence
+        self.isContext = isContext ?? [Bool](repeating: false, count: layout.count)
+        self.supportsLocalLatent = supportsLocalLatent
+            ?? [Bool](repeating: true, count: layout.count)
     }
 
     // MARK: - assembly
@@ -149,6 +164,9 @@ public struct DesignProblem {
             for c in 0 ..< k { seqProb[c][t] = c == known ? 1 : 0 }
         }
 
+        let emitBB = (0 ..< n).map { isContext[$0] ? Float(0) : 1 }
+        let emitLL = (0 ..< n).map { emitBB[$0] * (supportsLocalLatent[$0] ? 1 : 0) }
+
         let conditioning = Featurizer.Batch.Conditioning(
             internalCoords: anyInternal
                 ? MLXArray(internalCoords, [1, n, slots, 3]) : nil,
@@ -173,13 +191,17 @@ public struct DesignProblem {
             bondOrder: full(0, [1, n, n]),
             tokenBondPathLength: pathLength,
             canonicalPolymerOrdering: ordering,
-            // Both chains are generated. The target is held in place by its
-            // conditioning, not by a mask: `is_in_context_conditioning` is all false
-            // on upstream's own binder batch, so the emit masks are just the padding
-            // mask. Freezing the target here would be a different problem from the
-            // one the model was trained on.
-            emitBBCA: full(1, [1, n]),
-            emitLocalLatents: full(1, [1, n]),
+            // `compute_flow_emit_masks`: bb_ca emits where padding & ~context, and
+            // local_latents additionally where supports_local_latent.
+            //
+            // For a binder both reduce to all-ones, because upstream's own batch has
+            // `is_in_context_conditioning` empty — the target is generated too and
+            // held in place by its conditioning, not by a mask. Writing the formula
+            // rather than the all-ones it currently evaluates to is the difference
+            // between a contract and a coincidence: partial diffusion sets context,
+            // and an atomized token clears supports_local_latent.
+            emitBBCA: MLXArray(emitBB, [1, n]),
+            emitLocalLatents: MLXArray(emitLL, [1, n]),
             conditioning: conditioning)
     }
 

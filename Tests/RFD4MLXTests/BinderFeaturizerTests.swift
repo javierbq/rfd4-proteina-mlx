@@ -148,6 +148,43 @@ struct BinderFeaturizerTests {
               "ConditionalAtom37NanometersCoorsSeqFeat")
     }
 
+    /// The emit masks are a formula, not the all-ones they currently evaluate to.
+    @Test("emit masks follow compute_flow_emit_masks, not a constant")
+    func emitMaskFormula() throws {
+        let layout = BinderLayoutTests.layout()
+        let n = layout.count
+        let coords = [[Vec3?]](repeating: [Vec3?](repeating: nil, count: Vocabulary.slotCount),
+                               count: n)
+        let known = [Int?](repeating: nil, count: n)
+
+        // The binder case: nothing is context, everything supports a local latent.
+        let plain = DesignProblem(layout: layout, coords: coords, knownSequence: known)
+            .system(seed: 0)
+        #expect(MLX.all(plain.emitBBCA .== 1).item(Bool.self))
+        #expect(MLX.all(plain.emitLocalLatents .== 1).item(Bool.self))
+
+        // Partial diffusion holds the first chain as context, and one token is
+        // atomized. If the masks were the constant they evaluate to above, neither
+        // of these would show.
+        var context = [Bool](repeating: false, count: n)
+        for t in 0 ..< 110 { context[t] = true }
+        var supports = [Bool](repeating: true, count: n)
+        supports[200] = false
+
+        let partial = DesignProblem(
+            layout: layout, coords: coords, knownSequence: known,
+            isContext: context, supportsLocalLatent: supports).system(seed: 0)
+        let bb = partial.emitBBCA[0].asArray(Float.self)
+        let ll = partial.emitLocalLatents[0].asArray(Float.self)
+        #expect(bb[0] == 0 && bb[109] == 0, "context tokens still emit bb_ca")
+        #expect(bb[110] == 1 && bb[224] == 1, "non-context tokens stopped emitting")
+        // local_latents is the bb_ca mask AND supports_local_latent, so the atomized
+        // token drops out of it while still emitting bb_ca.
+        #expect(bb[200] == 1 && ll[200] == 0,
+                "supports_local_latent is not being applied to the latent mask")
+        #expect(ll[110] == 1)
+    }
+
     @Test("the three factories match upstream on a binder")
     func factoryParity() throws {
         let fx = try #require(Self.fixture, "binder.json missing")

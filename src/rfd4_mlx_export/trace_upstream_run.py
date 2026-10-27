@@ -9,6 +9,17 @@ runs the reference implementation on the SAME batch and traces the same numbers:
   - if it collapses too, the batch is wrong
   - if it produces a protein, the wiring is wrong
 
+**This is not an independent check of the batch**, and once it was mistaken for
+one. It imports `build_batch`, so both sides are fed the same synthetic batch by
+construction: when that batch left every connectivity field at the schema default,
+upstream generated the same cloud of fragments the Swift port did, and the agreement
+read as "the model does this" rather than "the input is wrong". The question it can
+answer is only ever "same batch, same behaviour?".
+
+What validates the batch itself is `dump_binder_batch.py`, which runs upstream's
+real `ConditionSpecDataset` pipeline on a shipped design spec, and the Swift
+`BinderLayoutTests`, which compares the port's token layout against that output.
+
 Usage:
     python trace_upstream_run.py <snapshot-dir> [n_tokens] [nsteps]
 """

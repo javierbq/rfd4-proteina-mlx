@@ -221,3 +221,43 @@ ligands — the full-vocabulary scope, not binder design.
   is 638 tokens against a model trained at `_max_tokens: 256`. Everything landed so far is
   scope-independent foundation, but the featurizer's conditioning design should not be
   finalised before that result.
+
+## Binder design (27 Oct 2026)
+
+A design request now becomes a batch. `Contig` parses the shipped grammar,
+`TokenLayout` derives the connectivity across a chain break, and `DesignProblem`
+assembles the conditioning.
+
+Verified against upstream's own `ConditionSpecDataset` run of
+`"50-120, /0, A17-131"` on `docs/examples/inputs/5o45_cropped.cif.zst` — 225
+tokens, 110 designed then 115 of the PD-L1 target:
+
+| what | max rel |
+| --- | --- |
+| `token_bond_path_length` | exact |
+| `canonical_polymer_ordering` | exact |
+| `SequenceProbabilitiesSeqFeat` | exact |
+| `ConditionalAtom37NanometersInternalCoorsSeqFeat` | exact |
+| `HotspotSeqFeat`, `CoordGroupSeqFeat` | exact |
+| `ConditionalAtom37NanometersCoorsSeqFeat` | exact |
+| `init_repr_factory` | 2.7e-07 |
+| `cond_factory` | 4.7e-07 |
+| `pair_repr_builder` (16×16 corner) | 4.8e-07 |
+
+Three things that only a conditioned run could expose:
+
+- **Coordinate groups are not raw.** `CoordGroupSeqFeat` relabels them with a fresh
+  random permutation of `0..k` on every forward pass, so for a single group the
+  network always sees `0`. Passing the pipeline's own id — `1` — feeds a value no
+  training example carried.
+- **The sequence-probability channel order is the registry's**, not sorted: 20 amino
+  acids alphabetically, then RNA, then DNA. Sorting as strings interleaves them
+  (`A`, `ALA`, `ARG`, …) and cost 8% of the sequence representation. The
+  per-creator bisection found it; the whole-factory number could not have.
+- **The target is not frozen.** `is_in_context_conditioning` is all false on
+  upstream's binder batch, so the emit masks are just the padding mask: both chains
+  are generated and the target is held in place by its conditioning alone.
+
+The free-pose recipe conditions on **internal** coordinates — the target's backbone
+centred on its own centroid and randomly rotated (`s=0`, no translation). The
+absolute-coordinate feature is inert there. Both are implemented.

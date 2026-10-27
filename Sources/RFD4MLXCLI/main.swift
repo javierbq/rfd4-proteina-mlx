@@ -8,16 +8,40 @@ import RFD4MLX
 //   rfd4-generate <weights.safetensors> <out.cif> [length] [seed] [low|medium]
 
 let args = CommandLine.arguments
-guard args.count >= 3 else {
-    FileHandle.standardError.write(Data("""
-        usage: rfd4-generate <weights.safetensors> <out.cif> [length] [seed] [low|medium]
 
-        Generates an unconditioned protein backbone with RFD4-Proteina running
-        natively in MLX, and writes it as mmCIF.
+func usage() -> Never {
+    FileHandle.standardError.write(Data("""
+        usage:
+          rfd4-generate <weights> <out.cif> [length] [seed] [low|medium]
+          rfd4-generate binder <weights> <target.cif> <out.cif> [length] [seed] [low|medium]
+
+        Runs RFD4-Proteina natively in MLX and writes mmCIF.
+
+        The first form generates an unconditioned backbone. The second designs a
+        binder against a target structure, using the shipped protein-binder recipe:
+        contig "50-120, /0, A17-131", the target's backbone as one rigid group with
+        a free pose, its sequence given, and hotspots on A56, A115 and A123.
 
         """.utf8))
     exit(2)
 }
+
+if args.count > 1, args[1] == "binder" {
+    guard args.count >= 5 else { usage() }
+    var options = BinderCommand.Options(weights: args[2], target: args[3], out: args[4])
+    if args.count > 5 { options.designLength = Int(args[5]) }
+    if args.count > 6 { options.seed = UInt64(args[6]) ?? 0 }
+    if args.count > 7, args[7] == "medium" { options.strategy = .thinkingMedium }
+    do {
+        try BinderCommand.run(options)
+    } catch {
+        FileHandle.standardError.write(Data("error: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+}
+
+guard args.count >= 3 else { usage() }
 
 let weightsPath = (args[1] as NSString).expandingTildeInPath
 let outPath = args[2]

@@ -172,6 +172,38 @@ at 64 tokens one pair capture alone would be 6 MB.
 **The Swift consumer for these is not written yet** — the fixtures exist, nothing reads
 them. That is the next step, and it is what Phase 2 is checked against.
 
+## Conditioning scope, measured
+
+Run upstream's own pipeline on the shipped `examples/protein_binder/input.cif` — a
+real binder design, 225 tokens — and hook every feature creator
+(`src/rfd4_mlx_export/scope_conditioned_features.py`). Result:
+
+| regime | live creators |
+|---|---|
+| unconditioned de-novo | 13 of 35 |
+| **binder design** | **17 of 35** |
+
+So conditioning costs **four more features**, not the twenty-two the de-novo
+measurement left open:
+
+| newly live | width | carries |
+|---|---|---|
+| `ConditionalAtom37NanometersCoorsSeqFeat` | 148 | the target's actual coordinates — how the target enters the model at all |
+| `SequenceProbabilitiesSeqFeat` | 56 | the target's known sequence |
+| `HotspotSeqFeat` | 37 | the hotspot residues |
+| `CanonicalPolymerOrderingPairFeat` | 1 | backbone linkage direction |
+
+Eighteen stay inert even conditioned: RASA, secondary structure, hydrogen bonds,
+pi-stacking, pi-cation, salt bridges, hydrophobic, metal coordination, nucleic-acid
+SS (seq and pair), atom charge, atomic element, chirality, chain centroid, internal
+coordinates, recycle-remaining, bond mask, is-aromatic.
+
+**`ChiralitySeqFeat` is among them.** That retires, for this scope, the MLX spike
+flagged as a possible redesign-forcer: the batched SVD in `noise_alignment.py` runs
+every forward pass but early-returns when no chiral frames exist, and a conditioned
+canonical-20 protein has none. The SVD only goes live with NCAAs, glycans or
+ligands — the full-vocabulary scope, not binder design.
+
 ## Known gaps that are not test coverage
 
 - **Weights have not been downloaded.** Everything above is architecture- and

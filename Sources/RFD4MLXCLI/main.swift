@@ -135,4 +135,6 @@ print(String(format: "  CA-CA %.2f A (min %.2f max %.2f)",
 print(String(format: "  peak GPU memory %.2f GB (MLX), active %.2f GB",
              Double(MLX.GPU.peakMemory) / 1_073_741_824,
              Double(MLX.GPU.activeMemory) / 1_073_741_824))
+let profile = Profile.report()
+if !profile.isEmpty { print("\nwhere the time went:\n" + profile) }
 print("wrote \(outPath)")

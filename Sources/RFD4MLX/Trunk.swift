@@ -96,11 +96,12 @@ public struct Trunk {
     ) -> (s: MLXArray, z: MLXArray) {
         var s = s, z = z
         for i in 0 ..< Self.layerCount {
-            s = layers[i](s, pairRep: z, cond: cond, mask: mask)
+            s = Profile.section("trunk.attention") { layers[i](s, pairRep: z, cond: cond, mask: mask) }
             if i < Self.layerCount - 1, let pu = pairUpdates[i] {
-                z = pu(s, pairRep: z, mask: mask)
+                z = Profile.section("trunk.pairUpdate") { pu(s, pairRep: z, mask: mask) }
             }
         }
+        Profile.endPass()
         return (s, z)
     }
 

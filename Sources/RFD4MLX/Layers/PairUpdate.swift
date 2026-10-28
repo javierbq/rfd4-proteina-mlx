@@ -19,10 +19,20 @@ public struct TriangleMultiplication {
     let direction: Direction
     let normInW: MLXArray, normInB: MLXArray?
     let normOutW: MLXArray, normOutB: MLXArray?
-    let apW: MLXArray, agW: MLXArray
-    let bpW: MLXArray, bgW: MLXArray
-    let zW: MLXArray, gW: MLXArray
+    let zW: MLXArray
     let eps: Float
+
+    /// `linear_a_p`, `linear_a_g`, `linear_b_p`, `linear_b_g` and `linear_g` stacked
+    /// into one `[256+256+256+256+384, 384]` matrix.
+    ///
+    /// All five read the SAME `zn`, which is `[b, n, n, 384]` — 0.58 GB at n=638.
+    /// Run separately they stream it five times; run as one matmul they stream it
+    /// once and the GPU gets a wider, better-shaped problem. The result is sliced
+    /// back apart, so this is exact rather than an approximation: concatenating
+    /// along the output dimension and slicing is the definition of what the five
+    /// calls computed.
+    let fusedW: MLXArray
+    static let aSize = 256, gateSize = 384
 
     public init(_ w: Weights, direction: Direction, eps: Float = 1e-5) throws {
         self.direction = direction
@@ -31,29 +41,30 @@ public struct TriangleMultiplication {
         normInB = w.optional("layer_norm_in.bias")
         normOutW = try w("layer_norm_out.weight")
         normOutB = w.optional("layer_norm_out.bias")
-        apW = try w("linear_a_p.weight")
-        agW = try w("linear_a_g.weight")
-        bpW = try w("linear_b_p.weight")
-        bgW = try w("linear_b_g.weight")
         zW = try w("linear_z.weight")
-        gW = try w("linear_g.weight")
+        // Stacked once at load, not per call.
+        fusedW = MLX.concatenated([
+            try w("linear_a_p.weight"), try w("linear_a_g.weight"),
+            try w("linear_b_p.weight"), try w("linear_b_g.weight"),
+            try w("linear_g.weight"),
+        ], axis: 0)
     }
 
     /// `permute_final_dims` on a 4-D tensor, as the two directions use it.
     /// Outgoing: `a[b,i,k,c] -> [b,c,i,k]`, `b[b,j,k,c] -> [b,c,k,j]`.
     /// Incoming: `a[b,k,i,c] -> [b,c,i,k]`, `b[b,k,j,c] -> [b,c,k,j]`.
     private func combine(_ a: MLXArray, _ b: MLXArray) -> MLXArray {
-        let (am, bm): (MLXArray, MLXArray)
-        switch direction {
-        case .outgoing:
-            am = a.transposed(0, 3, 1, 2)
-            bm = b.transposed(0, 3, 2, 1)
-        case .incoming:
-            am = a.transposed(0, 3, 2, 1)
-            bm = b.transposed(0, 3, 1, 2)
-        }
+        let (am, bm): (MLXArray, MLXArray) = Profile.section("trimult.transposeIn", {
+            switch direction {
+            case .outgoing:
+                return (a.transposed(0, 3, 1, 2), b.transposed(0, 3, 2, 1))
+            case .incoming:
+                return (a.transposed(0, 3, 2, 1), b.transposed(0, 3, 1, 2))
+            }
+        }, force: { [$0.0, $0.1] })
         // [b, c, i, j] -> [b, i, j, c]
-        return MLX.matmul(am, bm).transposed(0, 2, 3, 1)
+        let prod = Profile.section("trimult.matmul") { MLX.matmul(am, bm) }
+        return Profile.section("trimult.transposeOut") { prod.transposed(0, 2, 3, 1) }
     }
 
     /// - Parameters:
@@ -63,14 +74,25 @@ public struct TriangleMultiplication {
         let m = pairMask.expandedDimensions(axis: -1)
         let zn = layerNorm(z, normInW, normInB, eps: eps)
 
-        let a = linear(zn, apW) * MLX.sigmoid(linear(zn, agW)) * m
-        let b = linear(zn, bpW) * MLX.sigmoid(linear(zn, bgW)) * m
+        // One matmul, then slice. `linear` is x @ Wᵀ, so stacking along the output
+        // dimension puts each projection in its own contiguous band of the result.
+        let fused = Profile.section("trimult.projections") { linear(zn, fusedW) }
+        let c = Self.aSize
+        let ap = fused[.ellipsis, 0 ..< c]
+        let ag = fused[.ellipsis, c ..< (2 * c)]
+        let bp = fused[.ellipsis, (2 * c) ..< (3 * c)]
+        let bg = fused[.ellipsis, (3 * c) ..< (4 * c)]
+        let gl = fused[.ellipsis, (4 * c) ..< (4 * c + Self.gateSize)]
+
+        let a = ap * MLX.sigmoid(ag) * m
+        let b = bp * MLX.sigmoid(bg) * m
 
         var x = combine(a, b)
-        x = layerNorm(x, normOutW, normOutB, eps: eps)
-        x = linear(x, zW)
-        let g = MLX.sigmoid(linear(zn, gW))
-        return x * g
+        return Profile.section("trimult.output") {
+            x = layerNorm(x, normOutW, normOutB, eps: eps)
+            x = linear(x, zW)
+            return x * MLX.sigmoid(gl)
+        }
     }
 }
 
@@ -159,7 +181,7 @@ public struct PairReprUpdate {
 
         z = (z + triOut(z, pairMask: pairMask)) * pm
         z = (z + triIn(z, pairMask: pairMask)) * pm
-        z = (z + transition(z, pairMask: pairMask)) * pm
+        z = Profile.section("pair.transition") { (z + transition(z, pairMask: pairMask)) * pm }
         return z
     }
 }

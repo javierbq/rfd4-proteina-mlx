@@ -317,7 +317,10 @@ public struct Featurizer {
     /// All three trunk inputs for one sampling step.
     public func callAsFunction(_ b: Batch) -> (sInit: MLXArray, zInit: MLXArray, cond: MLXArray) {
         let mask = b.paddingMask.expandedDimensions(axis: -1)
-        return (sequenceFeatures(b) * mask, pairRepresentation(b), conditioning(b))
+        let seq = Profile.section("featurizer.seq") { sequenceFeatures(b) * mask }
+        let pair = Profile.section("featurizer.pair") { pairRepresentation(b) }
+        let cond = Profile.section("featurizer.cond") { conditioning(b) }
+        return (seq, pair, cond)
     }
 
     /// Declared width of each factory's concatenation, for checking against the

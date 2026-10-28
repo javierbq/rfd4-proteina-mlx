@@ -21,8 +21,41 @@ public struct Weights {
     }
 
     /// Load a safetensors checkpoint.
-    public static func load(_ url: URL) throws -> Weights {
-        Weights(arrays: try MLX.loadArrays(url: url))
+    /// The precision the network's weights are held and computed in.
+    ///
+    /// `bfloat16` keeps fp32's exponent range and drops mantissa bits, which is the
+    /// right trade for this network: the pair track moves hundreds of megabytes per
+    /// layer, so halving every tensor halves the traffic, and MLX accumulates matmuls
+    /// in fp32 regardless. It is **not** exact, so the parity suite alone cannot
+    /// clear it — the matched-noise harness is what measures the cost, by driving
+    /// both precisions down upstream's own trajectory so the difference that remains
+    /// is precision rather than sampling.
+    public enum Precision: String, Sendable {
+        case float32, bfloat16
+
+        /// `RFD4_DTYPE=bf16` switches a run over without a rebuild.
+        public static var fromEnvironment: Precision {
+            switch ProcessInfo.processInfo.environment["RFD4_DTYPE"]?.lowercased() {
+            case "bf16", "bfloat16": return .bfloat16
+            default: return .float32
+            }
+        }
+
+        var dtype: DType { self == .bfloat16 ? .bfloat16 : .float32 }
+    }
+
+    public static func load(_ url: URL, precision: Precision = .fromEnvironment) throws
+        -> Weights {
+        let raw = try MLX.loadArrays(url: url)
+        guard precision != .float32 else { return Weights(arrays: raw) }
+        // Cast only the floating-point tensors. An index or mask stored as an
+        // integer stays what it is; casting one to bfloat16 would silently round
+        // large indices.
+        var cast = [String: MLXArray](minimumCapacity: raw.count)
+        for (key, value) in raw {
+            cast[key] = value.dtype == .float32 ? value.asType(precision.dtype) : value
+        }
+        return Weights(arrays: cast)
     }
 
     /// A view scoped to `path`, so a layer reads `"weight"` rather than its full path.

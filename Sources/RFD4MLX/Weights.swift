@@ -1,5 +1,6 @@
 import Foundation
 import MLX
+import MLXFast
 
 /// A view over the checkpoint's flat tensor dictionary, scoped to one module.
 ///
@@ -111,9 +112,13 @@ public func linear(_ x: MLXArray, _ w: MLXArray, _ b: MLXArray? = nil) -> MLXArr
 /// with no learned weight (`elementwise_affine: False`).
 @inlinable
 public func rmsNorm(_ x: MLXArray, _ weight: MLXArray?, eps: Float = 1e-5) -> MLXArray {
+    // MLXFast has a fused kernel; the arithmetic below is the same but reaches the
+    // GPU as half a dozen separate elementwise passes over the whole tensor. On the
+    // pair track that tensor is [b, n, n, 384] — 0.58 GB at n=638 — so the number of
+    // passes over it is not a detail.
+    if let weight { return MLXFast.rmsNorm(x, weight: weight, eps: eps) }
     let ms = MLX.mean(x * x, axis: -1, keepDims: true)
-    let normed = x * MLX.rsqrt(ms + eps)
-    return weight.map { normed * $0 } ?? normed
+    return x * MLX.rsqrt(ms + eps)
 }
 
 /// `torch.nn.LayerNorm`: subtracts the mean, unlike `rmsNorm`.
@@ -128,13 +133,9 @@ public func rmsNorm(_ x: MLXArray, _ weight: MLXArray?, eps: Float = 1e-5) -> ML
 public func layerNorm(
     _ x: MLXArray, _ weight: MLXArray?, _ bias: MLXArray?, eps: Float = 1e-5
 ) -> MLXArray {
-    let mu = MLX.mean(x, axis: -1, keepDims: true)
-    let centered = x - mu
-    let variance = MLX.mean(centered * centered, axis: -1, keepDims: true)
-    var y = centered * MLX.rsqrt(variance + eps)
-    if let weight { y = y * weight }
-    if let bias { y = y + bias }
-    return y
+    // Same reasoning as rmsNorm: the fused kernel replaces mean, subtract, square,
+    // mean, rsqrt, scale and offset — seven passes — with one.
+    MLXFast.layerNorm(x, weight: weight, bias: bias, eps: eps)
 }
 
 /// Which normalisation a module was built with.

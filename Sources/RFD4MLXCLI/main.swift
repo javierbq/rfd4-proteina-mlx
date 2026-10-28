@@ -14,16 +14,35 @@ func usage() -> Never {
         usage:
           rfd4-generate <weights> <out.cif> [length] [seed] [low|medium]
           rfd4-generate binder <weights> <target.cif> <out.cif> [length] [seed] [low|medium]
+          rfd4-generate partial <weights> <input.cif> <out.cif> [fraction] [seed]
 
         Runs RFD4-Proteina natively in MLX and writes mmCIF.
 
-        The first form generates an unconditioned backbone. The second designs a
-        binder against a target structure, using the shipped protein-binder recipe:
+        The first form generates an unconditioned backbone. The third re-runs the
+        tail of the trajectory on a structure you already have, so the output is a
+        variation of it rather than a fresh design; a smaller fraction stays closer
+        to the input.
+
+        The second designs a binder against a target, using the shipped recipe:
         contig "50-120, /0, A17-131", the target's backbone as one rigid group with
         a free pose, its sequence given, and hotspots on A56, A115 and A123.
 
         """.utf8))
     exit(2)
+}
+
+if args.count > 1, args[1] == "partial" {
+    guard args.count >= 5 else { usage() }
+    var options = PartialCommand.Options(weights: args[2], input: args[3], out: args[4])
+    if args.count > 5, let f = Double(args[5]) { options.fraction = f }
+    if args.count > 6 { options.seed = UInt64(args[6]) ?? 0 }
+    do {
+        try PartialCommand.run(options)
+    } catch {
+        FileHandle.standardError.write(Data("error: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
 }
 
 if args.count > 1, args[1] == "binder" {

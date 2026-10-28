@@ -154,6 +154,31 @@ struct PartialDiffusionTests {
         }
     }
 
+    /// A larger fraction must restart earlier, in both modalities.
+    ///
+    /// This is the knob's whole contract — "how much do I trust the model to change
+    /// what I gave it" — and it is the half of it that costs nothing to check. The
+    /// other half needs the weights: measured on a 225-token complex, CA drift from
+    /// the input goes 0.30 Å, 0.71 Å, 2.20 Å, 8.53 Å at fractions 0.3, 0.5, 0.7, 0.9.
+    @Test("a larger fraction restarts earlier and runs longer")
+    func fractionIsMonotonic() throws {
+        let full = try sampleSchedule(nsteps: 60, modalities: ModalityConfig.released)
+        var previous: [String: Float] = ["bb_ca": 2, "local_latents": 2]
+        var previousSteps = 0
+        for fraction in [0.1, 0.3, 0.5, 0.7, 0.9] {
+            let steps = try PartialDiffusion.remainingSteps(fraction: fraction, nsteps: 60)
+            #expect(steps > previousSteps, "fraction \(fraction) did not run longer")
+            previousSteps = steps
+            let t = try PartialDiffusion.partialT(fraction: fraction, nsteps: 60,
+                                                  schedule: full)
+            for (mode, value) in t {
+                let why = "\(mode) at fraction \(fraction) restarts at \(value), not earlier than \(previous[mode]!)"
+                #expect(value < previous[mode]!, "\(why)")
+                previous[mode] = value
+            }
+        }
+    }
+
     @Test("invalid restarts are refused")
     func restartErrors() throws {
         #expect(throws: PartialDiffusionError.self) {

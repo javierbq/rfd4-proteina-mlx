@@ -146,6 +146,98 @@ public struct Generator {
             conditioning: s.conditioning)
     }
 
+    /// Restart a trajectory from a structure instead of from noise.
+    ///
+    /// Corrupt the input to a point on the configured schedule, then denoise only
+    /// the tail. The fraction names how many of the full trajectory's steps to run,
+    /// and the corruption time is read off the schedule at that index — see
+    /// `PartialDiffusion`, and note the two modalities land at very different times
+    /// from one fraction.
+    ///
+    /// - Parameters:
+    ///   - structure: what to start from. Its latents come from the encoder, which
+    ///     is why this takes one; `bb_ca` is the CA row of its atom37 coordinates,
+    ///     in nanometres and uncentred, which is what upstream's `x_1` holds.
+    ///   - fraction: how much of the trajectory to re-run. Smaller keeps more of the
+    ///     input.
+    ///   - encodeDeterministically: take the encoder's mean rather than a draw. The
+    ///     released flow samples, so this is off by default; it exists because a
+    ///     caller comparing two partial runs wants the latent fixed.
+    public func generatePartial(
+        _ system: System,
+        from structure: Encoder.Structure,
+        encoder: Encoder,
+        fraction: Double,
+        seed: UInt64 = 0,
+        encodeDeterministically: Bool = false,
+        stochastic: Bool = true,
+        onStep: ((Int, Int) -> Void)? = nil
+    ) throws -> Result {
+        // An all-NaN latent is not a degraded answer; refuse before spending the run.
+        try structure.validate()
+
+        let fullSteps = ReleasedRecycleStrategy.nsteps
+        let full = try sampleSchedule(nsteps: fullSteps, modalities: ModalityConfig.released)
+        let nsteps = try PartialDiffusion.remainingSteps(fraction: fraction,
+                                                         nsteps: fullSteps)
+        let partialT = try PartialDiffusion.partialT(fraction: fraction,
+                                                     nsteps: fullSteps, schedule: full)
+        let tail = try PartialDiffusion.tail(of: full, nsteps: nsteps)
+
+        var key = MLXRandom.key(seed)
+        func draw(_ shape: [Int]) -> MLXArray {
+            let keys = MLXRandom.split(key: key, into: 2)
+            key = keys[0]
+            return MLXRandom.normal(shape, key: keys[1])
+        }
+
+        let latents = encoder(structure, seed: encodeDeterministically ? nil : seed)
+        let n = system.tokenCount
+        let x1: [String: MLXArray] = [
+            // Slot 1 is CA. Uncentred: upstream's x_1 is exactly coords/10.
+            "bb_ca": structure.coordsNM[0..., 0..., 1, 0...],
+            "local_latents": latents.z,
+        ]
+        let emitMasks = ["bb_ca": system.emitBBCA, "local_latents": system.emitLocalLatents]
+
+        let corrupted = Corruption.corrupt(
+            x1: x1, t: partialT, emitMasks: emitMasks,
+            groupIDs: system.moleculeIID,
+            baseNoise: { _, shape in draw(shape) },
+            offsetDraw: { _, _, dim in draw([1, dim]) })
+
+        var pass = 0
+        let depths = Array(repeating: 1, count: nsteps)
+        let xFinal = Sampler.simulate(
+            x0: corrupted.xt, schedule: tail, nsteps: nsteps, recycleDepths: depths,
+            params: Sampler.StepParams.released, emitMasks: emitMasks,
+            predict: { x, t, depth in
+                let b = self.batch(system, x: x, t: t)
+                let (sInit, zInit, cond) = self.featurizer(b)
+                let out = self.trunk(
+                    sInit: sInit, zInit: zInit, cond: cond, mask: system.paddingMask,
+                    emitBBCA: system.emitBBCA, emitLocalLatents: system.emitLocalLatents,
+                    nRecycle: depth)
+                pass += max(1, depth)
+                return ["bb_ca": out.bbCA, "local_latents": out.localLatents]
+            },
+            noiseFor: { _, _, shape in stochastic ? draw(shape) : nil },
+            onStep: { step, _ in onStep?(step, pass) })
+
+        let decoded = decoder(
+            seqInit: decoder.sequenceFeatures(
+                latents: xFinal["local_latents"]!, caCoordsNM: xFinal["bb_ca"]!,
+                tokenType: system.tokenType),
+            cond: MLX.zeros([1, n, 128]),
+            attnMask: system.emitBBCA,
+            emitMask: system.emitLocalLatents,
+            caCoordsNM: xFinal["bb_ca"]!,
+            tokenType: system.tokenType.asType(.int32))
+
+        return Result(coordsNM: decoded.coordsNM, aatype: decoded.aatype,
+                      atomMask: decoded.atomMask, xFinal: xFinal)
+    }
+
     /// Run the full trajectory and decode the result.
     ///
     /// - Parameters:

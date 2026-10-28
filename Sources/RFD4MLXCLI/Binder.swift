@@ -193,7 +193,7 @@ enum BinderCommand {
     }
 
     /// Write both chains, labelled, so the design can be told from the target.
-    private static func writeComplex(
+    static func writeComplex(
         _ result: Generator.Result, layout: TokenLayout, vocab: Vocabulary, to path: String
     ) throws {
         var resNames: [String] = [], atomNames: [String] = [], xyz: [Vec3] = []

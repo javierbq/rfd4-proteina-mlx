@@ -128,4 +128,11 @@ print(String(format: "generated %d residues, %d atoms in %.1fs (%@)",
 print(String(format: "  CA-CA %.2f A (min %.2f max %.2f)",
              caca.mean().item(Float.self), caca.min().item(Float.self),
              caca.max().item(Float.self)))
+// MLX's own counter, not RSS. On unified memory the weights are mmap'd and the
+// working set lives in Metal buffers, so `maximum resident set size` reports a
+// fraction of the truth — 0.71 GB for a model whose fp32 parameters alone are
+// 1.74 GB.
+print(String(format: "  peak GPU memory %.2f GB (MLX), active %.2f GB",
+             Double(MLX.GPU.peakMemory) / 1_073_741_824,
+             Double(MLX.GPU.activeMemory) / 1_073_741_824))
 print("wrote \(outPath)")

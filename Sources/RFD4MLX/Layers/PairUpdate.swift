@@ -34,6 +34,28 @@ public struct TriangleMultiplication {
     let fusedW: MLXArray
     static let aSize = 256, gateSize = 384
 
+    /// Gate chain: (fused, m) → (a, b).
+    ///
+    /// Without compile: 4 slices + 2 sigmoid + 4 multiply = 10 dispatches and 9
+    /// temporary [b, n, n, 256] allocations (157 MB each at n=638). With compile,
+    /// MLX fuses into one Metal kernel that reads `fused` and `m` once and writes
+    /// `a` and `b` without any intermediate allocation.
+    private static let compiledGate: @Sendable (MLXArray, MLXArray) -> (MLXArray, MLXArray) =
+        compile { (fused: MLXArray, m: MLXArray) -> (MLXArray, MLXArray) in
+            let c = TriangleMultiplication.aSize
+            let ap = fused[.ellipsis, 0 ..< c]
+            let ag = fused[.ellipsis, c ..< (2 * c)]
+            let bp = fused[.ellipsis, (2 * c) ..< (3 * c)]
+            let bg = fused[.ellipsis, (3 * c) ..< (4 * c)]
+            return (ap * MLX.sigmoid(ag) * m, bp * MLX.sigmoid(bg) * m)
+        }
+
+    /// Output gate: (x, gl) → x * sigmoid(gl) — compiled to avoid a temporary.
+    private static let compiledOutputGate: @Sendable (MLXArray, MLXArray) -> MLXArray =
+        compile { (x: MLXArray, gl: MLXArray) -> MLXArray in
+            x * MLX.sigmoid(gl)
+        }
+
     public init(_ w: Weights, direction: Direction, eps: Float = 1e-5) throws {
         self.direction = direction
         self.eps = eps
@@ -80,20 +102,14 @@ public struct TriangleMultiplication {
         // dimension puts each projection in its own contiguous band of the result.
         let fused = Profile.section("trimult.projections") { linearT(zn, fusedW) }
         let c = Self.aSize
-        let ap = fused[.ellipsis, 0 ..< c]
-        let ag = fused[.ellipsis, c ..< (2 * c)]
-        let bp = fused[.ellipsis, (2 * c) ..< (3 * c)]
-        let bg = fused[.ellipsis, (3 * c) ..< (4 * c)]
         let gl = fused[.ellipsis, (4 * c) ..< (4 * c + Self.gateSize)]
-
-        let a = ap * MLX.sigmoid(ag) * m
-        let b = bp * MLX.sigmoid(bg) * m
+        let (a, b) = Self.compiledGate(fused, m)
 
         var x = combine(a, b)
         return Profile.section("trimult.output") {
             x = layerNorm(x, normOutW, normOutB, eps: eps)
             x = linearT(x, zW)
-            return x * MLX.sigmoid(gl)
+            return Self.compiledOutputGate(x, gl)
         }
     }
 }
@@ -145,6 +161,15 @@ public struct PairReprUpdate {
     let write: Write
     let eps: Float
 
+    /// Masked residual add: (z, update, pm) → (z + update) * pm.
+    ///
+    /// Without compile: two dispatches (add + multiply) over a 0.58 GB tensor.
+    /// With compile: one kernel, called three times per pair update.
+    private static let compiledResidual: @Sendable (MLXArray, MLXArray, MLXArray) -> MLXArray =
+        compile { (z: MLXArray, update: MLXArray, pm: MLXArray) -> MLXArray in
+            (z + update) * pm
+        }
+
     public init(_ w: Weights, write: Write = .hadamard, eps: Float = 1e-5) throws {
         normInW = try w("layer_norm_in.weight")
         normInB = w.optional("layer_norm_in.bias")
@@ -182,9 +207,11 @@ public struct PairReprUpdate {
         var z = write == .sum ? pairRep + piB + pjB : pairRep + piB * pjB
         z = z * pm
 
-        z = (z + triOut(z, pairMask: pairMask)) * pm
-        z = (z + triIn(z, pairMask: pairMask)) * pm
-        z = Profile.section("pair.transition") { (z + transition(z, pairMask: pairMask)) * pm }
+        z = Self.compiledResidual(z, triOut(z, pairMask: pairMask), pm)
+        z = Self.compiledResidual(z, triIn(z, pairMask: pairMask), pm)
+        z = Profile.section("pair.transition") {
+            Self.compiledResidual(z, transition(z, pairMask: pairMask), pm)
+        }
         return z
     }
 }

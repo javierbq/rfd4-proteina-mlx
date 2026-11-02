@@ -105,6 +105,20 @@ public func linear(_ x: MLXArray, _ w: MLXArray, _ b: MLXArray? = nil) -> MLXArr
     return b.map { y + $0 } ?? y
 }
 
+/// Variant of `linear` for weights already stored transposed — `[in, out]` — so the
+/// matmul needs no further transpose. Use only with weights loaded via
+/// `MLX.contiguous(rawW.transposed())` at construction time.
+///
+/// The reason to bother: `w.transposed()` returns a strided view, and MLX's Metal
+/// matmul then selects the B-transposed GEMM path. Pre-materialising the transposed
+/// layout lets the B-normal path run instead, which is measurably faster for the wide
+/// pair-track matrices.
+@inlinable
+public func linearT(_ x: MLXArray, _ wT: MLXArray, _ b: MLXArray? = nil) -> MLXArray {
+    let y = MLX.matmul(x, wT)
+    return b.map { y + $0 } ?? y
+}
+
 /// `torch.nn.functional.rms_norm(x, (D,), weight, eps)`.
 ///
 /// RMSNorm, not LayerNorm: the mean is never subtracted. Every norm in this trunk

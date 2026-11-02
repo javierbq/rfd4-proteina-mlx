@@ -11,13 +11,14 @@ public struct Transition {
     let outW: MLXArray
 
     public init(_ w: Weights) throws {
-        inW = try w("swish_linear.0.weight")
-        outW = try w("linear_out.weight")
+        // Pre-transposed for the faster B-normal GEMM path.
+        inW = MLX.contiguous((try w("swish_linear.0.weight")).transposed())
+        outW = MLX.contiguous((try w("linear_out.weight")).transposed())
     }
 
     public func callAsFunction(_ x: MLXArray, mask: MLXArray) -> MLXArray {
-        let h = swiGLU(linear(x, inW))
-        return linear(h, outW) * mask.expandedDimensions(axis: -1)
+        let h = swiGLU(linearT(x, inW))
+        return linearT(h, outW) * mask.expandedDimensions(axis: -1)
     }
 }
 

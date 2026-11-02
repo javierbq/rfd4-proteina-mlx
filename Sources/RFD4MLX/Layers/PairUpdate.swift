@@ -41,13 +41,15 @@ public struct TriangleMultiplication {
         normInB = w.optional("layer_norm_in.bias")
         normOutW = try w("layer_norm_out.weight")
         normOutB = w.optional("layer_norm_out.bias")
-        zW = try w("linear_z.weight")
-        // Stacked once at load, not per call.
-        fusedW = MLX.concatenated([
+        // Pre-transpose at load so the forward matmul uses the B-normal GEMM path,
+        // which is faster than the B-transposed path for these wide pair-track shapes.
+        zW = MLX.contiguous((try w("linear_z.weight")).transposed())
+        // Stacked once at load, then pre-transposed for the same GEMM reason.
+        fusedW = MLX.contiguous(MLX.concatenated([
             try w("linear_a_p.weight"), try w("linear_a_g.weight"),
             try w("linear_b_p.weight"), try w("linear_b_g.weight"),
             try w("linear_g.weight"),
-        ], axis: 0)
+        ], axis: 0).transposed())
     }
 
     /// `permute_final_dims` on a 4-D tensor, as the two directions use it.
@@ -76,7 +78,7 @@ public struct TriangleMultiplication {
 
         // One matmul, then slice. `linear` is x @ Wᵀ, so stacking along the output
         // dimension puts each projection in its own contiguous band of the result.
-        let fused = Profile.section("trimult.projections") { linear(zn, fusedW) }
+        let fused = Profile.section("trimult.projections") { linearT(zn, fusedW) }
         let c = Self.aSize
         let ap = fused[.ellipsis, 0 ..< c]
         let ag = fused[.ellipsis, c ..< (2 * c)]
@@ -90,7 +92,7 @@ public struct TriangleMultiplication {
         var x = combine(a, b)
         return Profile.section("trimult.output") {
             x = layerNorm(x, normOutW, normOutB, eps: eps)
-            x = linear(x, zW)
+            x = linearT(x, zW)
             return x * MLX.sigmoid(gl)
         }
     }
@@ -107,9 +109,10 @@ public struct PairTransition {
     public init(_ w: Weights, eps: Float = 1e-5) throws {
         normW = try w("layer_norm.weight")
         normB = w.optional("layer_norm.bias")
-        w1 = try w("linear_1.weight")
+        // Pre-transposed for the faster B-normal GEMM path.
+        w1 = MLX.contiguous((try w("linear_1.weight")).transposed())
         b1 = w.optional("linear_1.bias")
-        w2 = try w("linear_2.weight")
+        w2 = MLX.contiguous((try w("linear_2.weight")).transposed())
         b2 = w.optional("linear_2.bias")
         self.eps = eps
     }
@@ -117,8 +120,8 @@ public struct PairTransition {
     public func callAsFunction(_ z: MLXArray, pairMask: MLXArray) -> MLXArray {
         let m = pairMask.expandedDimensions(axis: -1)
         var y = layerNorm(z, normW, normB, eps: eps)
-        y = MLX.maximum(linear(y, w1, b1), 0)      // ReLU
-        return linear(y, w2, b2) * m
+        y = MLX.maximum(linearT(y, w1, b1), 0)      // ReLU
+        return linearT(y, w2, b2) * m
     }
 }
 

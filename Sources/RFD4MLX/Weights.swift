@@ -24,25 +24,50 @@ public struct Weights {
     /// Load a safetensors checkpoint.
     /// The precision the network's weights are held and computed in.
     ///
-    /// `bfloat16` keeps fp32's exponent range and drops mantissa bits, which is the
-    /// right trade for this network: the pair track moves hundreds of megabytes per
-    /// layer, so halving every tensor halves the traffic, and MLX accumulates matmuls
-    /// in fp32 regardless. It is **not** exact, so the parity suite alone cannot
-    /// clear it — the matched-noise harness is what measures the cost, by driving
-    /// both precisions down upstream's own trajectory so the difference that remains
-    /// is precision rather than sampling.
+    /// Half precision halves the traffic over the pair track, which moves hundreds of
+    /// megabytes per layer, and MLX accumulates matmuls in fp32 regardless of operand
+    /// width. Measured on a HEAD-equivalent pair-update replica, uncontended:
+    ///
+    ///     n=320   fp32 213.5 ms   fp16 171.1 ms (1.25x)   bf16 171.0 ms (1.25x)
+    ///     n=638   fp32 897.0 ms   fp16 727.3 ms (1.23x)   bf16 724.6 ms (1.24x)
+    ///
+    /// The speed is identical between the two half formats; the accuracy is not.
+    /// After 7 stacked pair updates, against an fp32 reference:
+    ///
+    ///     fp16   max|d|/max|z| 2.2e-03    rms 9.6e-04
+    ///     bf16   max|d|/max|z| 1.7e-02    rms 7.5e-03
+    ///
+    /// So **fp16 is the better half format here, by about 8x, for the same speed**.
+    /// The usual reason to prefer bfloat16 — its wider exponent range — does not
+    /// apply: the pair track's values sit around |z| < 3, nowhere near fp16's range
+    /// limit, so fp16's extra mantissa bits are pure gain. Do not "upgrade" this to
+    /// bfloat16 on general principle without re-measuring.
+    ///
+    /// None of this is exact, so the parity suite cannot clear it. Those numbers come
+    /// from a 7-layer microbenchmark; a real run is 14 layers x 120 passes x 60 steps
+    /// and the error compounds. The matched-noise harness is the instrument that
+    /// settles whether a half format is good enough, by driving both precisions down
+    /// upstream's own trajectory so what remains is precision rather than sampling.
+    /// Until that has been run, fp32 stays the default.
     public enum Precision: String, Sendable {
-        case float32, bfloat16
+        case float32, float16, bfloat16
 
-        /// `RFD4_DTYPE=bf16` switches a run over without a rebuild.
+        /// `RFD4_DTYPE=fp16` or `=bf16` switches a run over without a rebuild.
         public static var fromEnvironment: Precision {
             switch ProcessInfo.processInfo.environment["RFD4_DTYPE"]?.lowercased() {
+            case "fp16", "f16", "float16": return .float16
             case "bf16", "bfloat16": return .bfloat16
             default: return .float32
             }
         }
 
-        var dtype: DType { self == .bfloat16 ? .bfloat16 : .float32 }
+        var dtype: DType {
+            switch self {
+            case .float32: .float32
+            case .float16: .float16
+            case .bfloat16: .bfloat16
+            }
+        }
     }
 
     public static func load(_ url: URL, precision: Precision = .fromEnvironment) throws

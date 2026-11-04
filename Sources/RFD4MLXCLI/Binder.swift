@@ -11,6 +11,8 @@ import RFD4MLX
 /// atoms the design should engage.
 enum BinderCommand {
 
+    struct ResidueKey: Hashable { let chain: String; let residue: Int }
+
     struct Options {
         var weights: String
         var target: String
@@ -27,6 +29,97 @@ enum BinderCommand {
         var designLength: Int?
         var seed: UInt64 = 0
         var strategy: ReleasedRecycleStrategy = .thinkingLow
+        /// How many designs to produce. Seeds run `seed ..< seed + count`.
+        var count = 1
+        /// Where per-design metrics are appended, one row each.
+        var statsPath: String?
+
+        /// `A245:CB,SG A248:CA` — the form the batch runner takes on the command line.
+        static func parseHotspots(_ spec: String)
+            -> [(chain: String, residue: Int, atom: String)] {
+            var out: [(chain: String, residue: Int, atom: String)] = []
+            for group in spec.split(separator: " ") {
+                let parts = group.split(separator: ":")
+                guard parts.count == 2 else { continue }
+                let head = String(parts[0])
+                let chain = String(head.prefix(while: { $0.isLetter }))
+                guard let residue = Int(head.dropFirst(chain.count)) else { continue }
+                for atom in parts[1].split(separator: ",") {
+                    out.append((chain, residue, String(atom)))
+                }
+            }
+            return out
+        }
+    }
+
+
+    struct Built {
+        let problem: DesignProblem
+        let hotspots: [(token: Int, slot: Int)]
+    }
+
+    /// Hang the target's atoms on the tokens that preserve them.
+    ///
+    /// Called once per design because the contig redraws the binder length each
+    /// seed, so the token indices shift and every array here is layout-shaped.
+    static func build(
+        layout: TokenLayout,
+        atomsByResidue: [ResidueKey: [(slot: Int, name: String, coord: Vec3)]],
+        residueName: [ResidueKey: String],
+        options o: Options
+    ) throws -> Built {
+        var coords = [[Vec3?]](repeating: [Vec3?](repeating: nil, count: Vocabulary.slotCount),
+                               count: layout.count)
+        var backbone: [(token: Int, slot: Int)] = []
+        var hotspots: [(token: Int, slot: Int)] = []
+        var knownSequence = [Int?](repeating: nil, count: layout.count)
+        let wanted = Set(o.hotspots.map { "\($0.chain)/\($0.residue)/\($0.atom)" })
+        var unresolved = 0
+
+        // A preserved token's run takes its id from the preserved segment itself, so
+        // `token.chainID` is the INPUT chain for exactly the tokens that have an
+        // input residue — which is every token this loop acts on.
+        for (t, token) in layout.tokens.enumerated() {
+            guard let rid = token.inputResidue else { continue }
+            let key = ResidueKey(chain: token.chainID, residue: rid)
+            guard let atoms = atomsByResidue[key] else { continue }
+            for atom in atoms {
+                coords[t][atom.slot] = atom.coord
+                // `not has_nan_coord()` in the shipped recipe's selection: an
+                // unresolved atom makes the whole group's centroid NaN.
+                let resolved = atom.coord.x.isFinite && atom.coord.y.isFinite
+                    && atom.coord.z.isFinite
+                if o.backboneAtoms.contains(atom.name) {
+                    if resolved { backbone.append((t, atom.slot)) } else { unresolved += 1 }
+                }
+                if wanted.contains("\(token.chainID)/\(rid)/\(atom.name)") {
+                    hotspots.append((t, atom.slot))
+                }
+            }
+            if let name = residueName[key],
+               let channel = DesignProblem.sequenceProbabilityChannels.firstIndex(of: name) {
+                knownSequence[t] = channel
+            }
+        }
+        guard !backbone.isEmpty else {
+            throw CLIError.message("no target backbone atoms matched the contig's residues")
+        }
+        // DISTINCT pairs, not matches: a duplicate row must not make up for an atom
+        // that is genuinely absent.
+        struct Flagged: Hashable { let token: Int; let slot: Int }
+        let distinct = Set(hotspots.map { Flagged(token: $0.token, slot: $0.slot) })
+        guard distinct.count == o.hotspots.count else {
+            throw CLIError.message("""
+                flagged \(distinct.count) distinct hotspot atoms of the \
+                \(o.hotspots.count) requested — check the residue numbering of \(o.target)
+                """)
+        }
+        return Built(
+            problem: DesignProblem(
+                layout: layout, coords: coords,
+                internalGroups: [DesignProblem.CoordinateGroup(members: backbone)],
+                hotspots: hotspots, knownSequence: knownSequence),
+            hotspots: hotspots)
     }
 
     static func run(_ o: Options) throws {
@@ -44,7 +137,6 @@ enum BinderCommand {
         // selects `chain_id == c & start <= res_id <= end`, and a multi-chain input
         // routinely numbers two chains over the same range, so dropping the chain
         // merges residues from a chain the contig never asked for.
-        struct ResidueKey: Hashable { let chain: String; let residue: Int }
         var residueName: [ResidueKey: String] = [:]
         var atomsByResidue: [ResidueKey: [(slot: Int, name: String, coord: Vec3)]] = [:]
         var residuesByChain: [String: Set<Int>] = [:]
@@ -72,124 +164,65 @@ enum BinderCommand {
                   + (gaps > 0 ? "  — \(gaps) unmodelled" : ""))
         }
 
-        // The layout. Preserved segments resolve against the residues the file
-        // actually contains, not against the arithmetic span of the range: an
-        // unmodelled loop makes a segment shorter than `end - start + 1`, and
-        // assuming otherwise inserts atom-less ghost tokens that shift the chain
-        // break and every conditioning array after them.
-        //
-        // The draw is supplied rather than left implicit, so the run is reproducible
-        // and the design length is reported rather than discovered.
-        var rng = SplitMix64(seed: o.seed)
-        let layout = try TokenLayout.make(
-            contig: o.contig,
-            residuesInChain: { residuesByChain[$0].map(Array.init) ?? [] },
-            draw: { lo, hi in
-                o.designLength ?? (lo == hi ? lo : lo + Int(rng.next() % UInt64(hi - lo + 1)))
-            })
-        let designed = layout.designedMask().filter { $0 }.count
-        print("layout: \(layout.count) tokens — \(designed) designed, "
-              + "\(layout.count - designed) target, breaks at \(layout.chainBreaks())")
-
-        // Hang the target's atoms on the tokens that preserve them.
-        var coords = [[Vec3?]](repeating: [Vec3?](repeating: nil, count: Vocabulary.slotCount),
-                               count: layout.count)
-        var backbone: [(token: Int, slot: Int)] = []
-        var hotspots: [(token: Int, slot: Int)] = []
-        var knownSequence = [Int?](repeating: nil, count: layout.count)
-        let wanted = Set(o.hotspots.map { "\($0.chain)/\($0.residue)/\($0.atom)" })
-
-        // A preserved token's run takes its id from the preserved segment itself, so
-        // `token.chainID` is the INPUT chain for exactly the tokens that have an
-        // input residue — which is every token this loop acts on.
-        var unknownResidues: [String: Int] = [:]
-        var unresolved = 0
-        for (t, token) in layout.tokens.enumerated() {
-            guard let rid = token.inputResidue else { continue }
-            let key = ResidueKey(chain: token.chainID, residue: rid)
-            guard let atoms = atomsByResidue[key] else { continue }
-            for atom in atoms {
-                coords[t][atom.slot] = atom.coord
-                // `not has_nan_coord()` in the shipped recipe's selection. An
-                // unresolved atom has no geometry to condition on, and including one
-                // makes the whole group's centroid NaN.
-                let resolved = atom.coord.x.isFinite && atom.coord.y.isFinite
-                    && atom.coord.z.isFinite
-                if o.backboneAtoms.contains(atom.name) {
-                    if resolved { backbone.append((t, atom.slot)) } else { unresolved += 1 }
-                }
-                if wanted.contains("\(token.chainID)/\(rid)/\(atom.name)") {
-                    hotspots.append((t, atom.slot))
-                }
-            }
-            guard let name = residueName[key] else { continue }
-            if let channel = DesignProblem.sequenceProbabilityChannels.firstIndex(of: name) {
-                knownSequence[t] = channel
-            } else {
-                // A residue outside the 28 channels — a modified residue such as MSE,
-                // or UNK. Its sequence is simply not given; saying so beats leaving
-                // the user to wonder why the conditioning count is short.
-                unknownResidues[name, default: 0] += 1
-            }
-        }
-        if !unknownResidues.isEmpty {
-            let listed = unknownResidues.sorted { $0.key < $1.key }
-                .map { "\($0.key)×\($0.value)" }.joined(separator: ", ")
-            print("note: \(listed) are outside the 28 sequence-probability channels; "
-                  + "their sequence is left unspecified")
-        }
-        if unresolved > 0 {
-            print("note: \(unresolved) unresolved backbone atoms excluded from the "
-                  + "rigid group")
-        }
-        print("conditioning: \(backbone.count) backbone atoms in one rigid group, "
-              + "\(hotspots.count) hotspot atoms, "
-              + "\(knownSequence.compactMap { $0 }.count) residues of known sequence")
-        guard !backbone.isEmpty else {
-            throw CLIError.message("no target backbone atoms matched the contig's residues")
-        }
-        // DISTINCT pairs, not matches. Counting matches lets a duplicate row make up
-        // for an atom that is genuinely absent: the guard reads 6 of 6 while only
-        // five slots are flagged, and the design runs against a hotspot set smaller
-        // than the one requested, reported as complete.
-        struct Flagged: Hashable { let token: Int; let slot: Int }
-        let distinctHotspots = Set(hotspots.map { Flagged(token: $0.token, slot: $0.slot) })
-        guard distinctHotspots.count == o.hotspots.count else {
-            throw CLIError.message("""
-                flagged \(distinctHotspots.count) distinct hotspot atoms of the \
-                \(o.hotspots.count) requested (\(hotspots.count) rows matched) — check the \
-                residue numbering of \(o.target)
-                """)
-        }
-
-        let problem = DesignProblem(
-            layout: layout, coords: coords,
-            internalGroups: [DesignProblem.CoordinateGroup(members: backbone)],
-            hotspots: hotspots, knownSequence: knownSequence)
-        // Refuse what upstream refuses, before spending 200 seconds on it.
-        let system = try problem.validatedSystem(seed: o.seed)
-
+        // Weights once, not once per design: loading is mmap'd and cheap, but the
+        // first forward pass compiles Metal kernels, and paying that 100 times is a
+        // real cost for no reason.
         let loadStart = Date()
         let generator = try Generator(weightsAt: URL(fileURLWithPath:
             (o.weights as NSString).expandingTildeInPath))
         print("loaded weights in \(String(format: "%.1f", Date().timeIntervalSince(loadStart)))s")
 
-        var lastReport = Date()
-        let runStart = Date()
-        let result = try generator.generate(system, strategy: o.strategy, seed: o.seed) {
-            step, passes in
-            if Date().timeIntervalSince(lastReport) > 10 {
-                print("  step \(step + 1)/\(ReleasedRecycleStrategy.nsteps)  \(passes) passes")
-                lastReport = Date()
+        if let statsPath = o.statsPath, !FileManager.default.fileExists(atPath: statsPath) {
+            let header = "seed,binder_len,tokens,seconds,caca_mean,caca_min,caca_max,"
+                + "binder_rg,iface_min,contacts_10a,hotspot_med,other_med,peak_gb\n"
+            try header.write(toFile: statsPath, atomically: true, encoding: .utf8)
+        }
+
+        let batchStart = Date()
+        for i in 0 ..< o.count {
+            let seed = o.seed &+ UInt64(i)
+            // The contig's 60-80 is redrawn per seed, so each design is its own
+            // length unless the caller pinned one.
+            var rng = SplitMix64(seed: seed)
+            let layout = try TokenLayout.make(
+                contig: o.contig,
+                residuesInChain: { residuesByChain[$0].map(Array.init) ?? [] },
+                draw: { lo, hi in
+                    o.designLength ?? (lo == hi ? lo : lo + Int(rng.next() % UInt64(hi - lo + 1)))
+                })
+            let built = try build(layout: layout, atomsByResidue: atomsByResidue,
+                                  residueName: residueName, options: o)
+            let system = try built.problem.validatedSystem(seed: seed)
+
+            let designed = layout.designedMask().filter { $0 }.count
+            let runStart = Date()
+            let result = try generator.generate(system, strategy: o.strategy, seed: seed) { _, _ in }
+            let elapsed = Date().timeIntervalSince(runStart)
+
+            let out = o.count == 1 ? o.out
+                : o.out.replacingOccurrences(of: ".cif", with: String(format: "_%03d.cif", i))
+            try writeComplex(result, layout: layout, vocab: vocab, to: out)
+
+            let m = metrics(result, chains: layout.chainRanges(),
+                            hotspotTokens: Set(built.hotspots.map(\.token)))
+            print(String(format: "  [%3d/%d] seed %llu  %d aa  %d tok  %6.1f s  "
+                         + "CA-CA %.2f  Rg %.1f  iface %.2f  contacts %d  hot %.1f/%.1f",
+                         i + 1, o.count, seed, designed, layout.count, elapsed,
+                         m.caca, m.rg, m.ifaceMin, m.contacts, m.hotMed, m.otherMed))
+            if let statsPath = o.statsPath {
+                let row = String(format: "%llu,%d,%d,%.1f,%.3f,%.3f,%.3f,%.2f,%.2f,%d,%.2f,%.2f,%.2f\n",
+                                 seed, designed, layout.count, elapsed,
+                                 m.caca, m.cacaMin, m.cacaMax, m.rg, m.ifaceMin,
+                                 m.contacts, m.hotMed, m.otherMed,
+                                 Double(MLX.GPU.peakMemory) / 1_073_741_824)
+                if let h = FileHandle(forWritingAtPath: statsPath) {
+                    h.seekToEndOfFile(); h.write(Data(row.utf8)); try? h.close()
+                }
             }
         }
-        let elapsed = Date().timeIntervalSince(runStart)
-
-        let chains = layout.chainRanges()
-        try writeComplex(result, layout: layout, vocab: vocab, to: o.out)
-        report(result, chains: chains, elapsed: elapsed, strategy: o.strategy,
-               hotspotTokens: Set(hotspots.map(\.token)))
-        print("wrote \(o.out)")
+        let total = Date().timeIntervalSince(batchStart)
+        print(String(format: "\n%d designs in %.1f s (%.1f s each)",
+                     o.count, total, total / Double(o.count)))
     }
 
     /// Write both chains, labelled, so the design can be told from the target.
@@ -225,62 +258,51 @@ enum BinderCommand {
         try CIFWriter.write(array, to: URL(fileURLWithPath: path), name: "rfd4_binder")
     }
 
-    /// Per-chain geometry, as a sanity line rather than a quality claim.
-    private static func report(
-        _ result: Generator.Result, chains: [Range<Int>], elapsed: TimeInterval,
-        strategy: ReleasedRecycleStrategy, hotspotTokens: Set<Int>
-    ) {
-        print(String(format: "generated in %.1fs (%@)", elapsed, strategy.rawValue))
+    struct Metrics {
+        let caca: Float, cacaMin: Float, cacaMax: Float, rg: Float
+        let ifaceMin: Float, contacts: Int, hotMed: Float, otherMed: Float
+    }
+
+    /// Geometry per design. These are interface and backbone metrics, not a claim
+    /// that anything binds — that is an experimental question.
+    static func metrics(
+        _ result: Generator.Result, chains: [Range<Int>], hotspotTokens: Set<Int>
+    ) -> Metrics {
         let ca = result.xFinal["bb_ca"]![0]
-        for (i, range) in chains.enumerated() {
-            let c = ca[range.lowerBound ..< range.upperBound]
+        func geom(_ r: Range<Int>) -> (caca: Float, lo: Float, hi: Float, rg: Float) {
+            let c = ca[r.lowerBound ..< r.upperBound]
             let n = c.dim(0)
-            guard n > 1 else { continue }
+            guard n > 1 else { return (0, 0, 0, 0) }
             let d = c[1...] - c[..<(n - 1)]
-            let caca = MLX.sqrt(MLX.sum(d * d, axis: -1)) * 10
+            let step = MLX.sqrt(MLX.sum(d * d, axis: -1)) * 10
             let centred = c - c.mean(axis: 0, keepDims: true)
             let rg = MLX.sqrt(MLX.mean(MLX.sum(centred * centred, axis: -1))) * 10
-            print(String(format: "  chain %d (%d residues)  CA-CA %.2f A (min %.2f max %.2f)  "
-                         + "Rg %.1f A", i, n, caca.mean().item(Float.self),
-                         caca.min().item(Float.self), caca.max().item(Float.self),
-                         rg.item(Float.self)))
+            return (step.mean().item(Float.self), step.min().item(Float.self),
+                    step.max().item(Float.self), rg.item(Float.self))
         }
-        // How far apart the two chains sit: a design that ignored the target would
-        // drift away from it entirely.
-        guard chains.count == 2 else { return }
+        let binder = geom(chains[0])
+        guard chains.count == 2 else {
+            return Metrics(caca: binder.caca, cacaMin: binder.lo, cacaMax: binder.hi,
+                           rg: binder.rg, ifaceMin: 0, contacts: 0, hotMed: 0, otherMed: 0)
+        }
         let a = ca[chains[0].lowerBound ..< chains[0].upperBound]
         let b = ca[chains[1].lowerBound ..< chains[1].upperBound]
         let diff = a.expandedDimensions(axis: 1) - b.expandedDimensions(axis: 0)
         let dist = MLX.sqrt(MLX.sum(diff * diff, axis: -1)) * 10
-        print(String(format: "  interface: closest CA-CA %.2f A, %d pairs within 10 A",
-                     dist.min().item(Float.self),
-                     MLX.sum((dist .< 10).asType(.int32)).item(Int32.self)))
 
-        // Did it engage the site it was told to? A binder that merely touches the
-        // target somewhere is not the same as one that found the hotspots, and the
-        // interface numbers above cannot tell the two apart. The comparison is
-        // against the rest of the target, so "close" means close *relative to* the
-        // residues it was not asked to engage.
-        guard !hotspotTokens.isEmpty else { return }
         let target = chains[1]
         var hot: [Float] = [], cold: [Float] = []
         for t in target {
             let d = dist[0..., t - target.lowerBound].min().item(Float.self)
             if hotspotTokens.contains(t) { hot.append(d) } else { cold.append(d) }
         }
-        // A median over an empty slice traps. Unreachable from the CLI today, since
-        // the contig is fixed and puts the target second — but the contig is a
-        // settable option, and the cost of not trapping is one guard.
-        func median(_ v: [Float]) -> Float? { v.isEmpty ? nil : v.sorted()[v.count / 2] }
-        guard let hotMedian = median(hot), let coldMedian = median(cold) else {
-            print("  hotspots: none fall in the chain being reported")
-            return
-        }
-        print(String(format: "  hotspots: %d residues, closest CA %.1f A (median)  —  "
-                     + "rest of target %.1f A", hot.count, hotMedian, coldMedian))
+        func median(_ v: [Float]) -> Float { v.isEmpty ? 0 : v.sorted()[v.count / 2] }
+        return Metrics(
+            caca: binder.caca, cacaMin: binder.lo, cacaMax: binder.hi, rg: binder.rg,
+            ifaceMin: dist.min().item(Float.self),
+            contacts: Int(MLX.sum((dist .< 10).asType(.int32)).item(Int32.self)),
+            hotMed: median(hot), otherMed: median(cold))
     }
-
-
 }
 
 enum CLIError: Error, CustomStringConvertible {

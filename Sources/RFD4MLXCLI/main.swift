@@ -48,9 +48,25 @@ if args.count > 1, args[1] == "partial" {
 if args.count > 1, args[1] == "binder" {
     guard args.count >= 5 else { usage() }
     var options = BinderCommand.Options(weights: args[2], target: args[3], out: args[4])
-    if args.count > 5 { options.designLength = Int(args[5]) }
-    if args.count > 6 { options.seed = UInt64(args[6]) ?? 0 }
-    if args.count > 7, args[7] == "medium" { options.strategy = .thinkingMedium }
+    // Named options after the three positionals, so a batch is expressible without
+    // another five positional slots nobody can remember the order of.
+    var rest = Array(args.dropFirst(5))
+    while let flag = rest.first {
+        rest.removeFirst()
+        guard flag.hasPrefix("--"), let value = rest.first else { break }
+        rest.removeFirst()
+        switch flag {
+        case "--contig":   options.contig = value
+        case "--hotspots": options.hotspots = BinderCommand.Options.parseHotspots(value)
+        case "--length":   options.designLength = Int(value)
+        case "--seed":     options.seed = UInt64(value) ?? 0
+        case "--count":    options.count = Int(value) ?? 1
+        case "--stats":    options.statsPath = value
+        case "--effort":   options.strategy = value == "medium" ? .thinkingMedium : .thinkingLow
+        default:
+            FileHandle.standardError.write(Data("unknown option \(flag)\n".utf8)); exit(2)
+        }
+    }
     do {
         try BinderCommand.run(options)
     } catch {

@@ -86,7 +86,7 @@ let strategy: ReleasedRecycleStrategy = (args.count > 5 && args[5] == "medium")
     ? .thinkingMedium : .thinkingLow
 
 let started = Date()
-let generator = try Generator(weightsAt: URL(fileURLWithPath: weightsPath))
+let generator = try Generator(weightsAtPathOrPack: weightsPath)
 print("loaded weights in \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
 
 let system = Generator.System.deNovo(length: length)

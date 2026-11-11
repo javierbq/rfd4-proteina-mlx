@@ -217,6 +217,38 @@ struct RFD4PackTests {
         }
     }
 
+    @Test("a path resolves as a pack or a bare checkpoint by what is on disk")
+    func pathOrPackDispatch() throws {
+        let dir = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Self.writePack(at: dir, precision: .float16)
+
+        // A directory goes through the pack, so its declared precision applies.
+        let fromPack = try Weights.loadPathOrPack(dir.path)
+        #expect(fromPack.arrays["nn.a.weight"]?.dtype == .float16)
+
+        // The same bytes named directly are a bare checkpoint: already fp16 on
+        // disk, and `narrowed` leaves non-fp32 tensors alone whatever is asked.
+        let fromFile = try Weights.loadPathOrPack(
+            dir.appendingPathComponent(RFD4Pack.weightsFilename).path)
+        #expect(fromFile.arrays.count == fromPack.arrays.count)
+
+        // A directory that is not a pack fails AS A PACK. "no manifest.json in
+        // <dir>" says what to do next; "could not read weights" does not.
+        let empty = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: empty) }
+        do {
+            _ = try Weights.loadPathOrPack(empty.path)
+            Issue.record("an empty directory loaded")
+        } catch let error as RFD4PackError {
+            #expect(error.description.contains("manifest.json"))
+        }
+
+        #expect(throws: (any Error).self) {
+            try Weights.loadPathOrPack(dir.appendingPathComponent("nope").path)
+        }
+    }
+
     @Test("both manifest spellings of a precision parse, and round-trip")
     func precisionNames() {
         #expect(Weights.Precision(manifestName: "fp16") == .float16)

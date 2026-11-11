@@ -112,8 +112,7 @@ enum PartialCommand {
         let system = try problem.validatedSystem(seed: o.seed)
 
         let loadStart = Date()
-        let weightsURL = URL(fileURLWithPath: (o.weights as NSString).expandingTildeInPath)
-        let w = try Weights.load(weightsURL)
+        let w = try Weights.loadPathOrPack(o.weights)
         let generator = try Generator(w)
         let encoder = try Encoder(w)
         print("loaded weights in \(String(format: "%.1f", Date().timeIntervalSince(loadStart)))s")

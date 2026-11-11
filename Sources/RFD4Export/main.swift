@@ -87,9 +87,13 @@ guard FileManager.default.fileExists(atPath: checkpointURL.path) else {
 // MARK: - read, narrow, write
 
 print("reading   \(checkpointURL.path)")
-// The checkpoint path is routinely a symlink into the HuggingFace blob store, and
-// the sha256 that identifies it is the blob's, so resolve before hashing.
+// The checkpoint path is routinely a symlink into the HuggingFace blob store, so
+// hash the resolved file but NAME the link. The blob is called something like
+// `092c821aa79f...`, which as a provenance field tells a reader nothing and looks
+// like a hash that disagrees with the sha256 beside it; `model.safetensors` plus
+// that sha256 is what identifies the thing.
 let resolvedCheckpoint = checkpointURL.resolvingSymlinksInPath()
+let sourceName = checkpointURL.lastPathComponent
 let sourceSHA = try RFD4Pack.sha256Hex(of: resolvedCheckpoint)
 let raw = try MLX.loadArrays(url: checkpointURL)
 
@@ -117,7 +121,7 @@ let metadata: [String: String] = [
     "format": "pt",
     "rfd4_pack_format": RFD4Pack.supportedFormat,
     "rfd4_precision": precision.manifestName,
-    "rfd4_source_checkpoint": resolvedCheckpoint.lastPathComponent,
+    "rfd4_source_checkpoint": sourceName,
     "rfd4_source_sha256": sourceSHA,
     "rfd4_vocabulary": vocabulary.name,
     "rfd4_vocabulary_ccd": vocabulary.ccdSnapshot,
@@ -138,7 +142,7 @@ let manifest = RFD4Pack.Manifest(
     format: RFD4Pack.supportedFormat,
     precision: precision.manifestName,
     weights: RFD4Pack.Provenance(
-        sourceCheckpoint: resolvedCheckpoint.lastPathComponent,
+        sourceCheckpoint: sourceName,
         sourceCheckpointSHA256: sourceSHA,
         exportedAt: exportedAt,
         exportedBy: "rfd4-export (rfd4-proteina-mlx)"),

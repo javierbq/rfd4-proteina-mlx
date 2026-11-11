@@ -246,3 +246,27 @@ public struct RFD4Pack {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
+
+extension Weights {
+    /// Weights from either a pack directory or a bare `.safetensors` file.
+    ///
+    /// Hosts hand over a directory — RayMol's weight cache extracts a bundle to
+    /// `<root>/<id>/<version>/` and passes that path along — while the CLI and the
+    /// test suite are usually pointed straight at a checkpoint. Deciding by what is
+    /// actually on disk means no caller has to know which it is holding.
+    ///
+    /// A directory that is not a pack fails AS A PACK, naming the missing manifest,
+    /// rather than as an unreadable file. That matters: "no manifest.json in
+    /// /path/to/dir" tells someone what to do next and "could not read weights"
+    /// does not.
+    public static func loadPathOrPack(_ path: String) throws -> Weights {
+        let expanded = (path as NSString).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory)
+        else { throw WeightsError.missing(expanded) }
+        if isDirectory.boolValue {
+            return try RFD4Pack(directory: URL(fileURLWithPath: expanded)).weights
+        }
+        return try Weights.load(URL(fileURLWithPath: expanded))
+    }
+}

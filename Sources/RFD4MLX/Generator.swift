@@ -24,6 +24,11 @@ public struct Generator {
         try self.init(Weights.load(url))
     }
 
+    /// Load from either a pack directory or a bare `.safetensors` file.
+    public init(weightsAtPathOrPack path: String) throws {
+        try self.init(Weights.loadPathOrPack(path))
+    }
+
     /// Everything about the system that does not change between sampling steps.
     ///
     /// For a single-chain de-novo protein these are all constants, but they are

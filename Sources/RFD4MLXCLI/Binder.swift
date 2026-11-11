@@ -168,8 +168,7 @@ enum BinderCommand {
         // first forward pass compiles Metal kernels, and paying that 100 times is a
         // real cost for no reason.
         let loadStart = Date()
-        let generator = try Generator(weightsAt: URL(fileURLWithPath:
-            (o.weights as NSString).expandingTildeInPath))
+        let generator = try Generator(weightsAtPathOrPack: o.weights)
         print("loaded weights in \(String(format: "%.1f", Date().timeIntervalSince(loadStart)))s")
 
         if let statsPath = o.statsPath, !FileManager.default.fileExists(atPath: statsPath) {

@@ -44,11 +44,20 @@ let package = Package(
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ]
         ),
+        // One benchmark target, deliberately. It builds the REAL TrunkLayer and
+        // PairReprUpdate against a synthetic weight dictionary of the checkpoint's
+        // shapes, so what it measures is the production forward pass rather than a
+        // replica of it -- a replica stops tracking the thing it replicates the
+        // moment that thing changes, which is how the earlier scratch benches went
+        // stale (they are archived on the `bench-scratch` branch).
+        //
+        // It needs no checkpoint, which is what makes it usable as the peak-memory
+        // instrument: `BMODE=mem BN=638 BB=1`.
         .executableTarget(
-            name: "BenchTmp",
+            name: "BatchBench",
             dependencies: [
+                "RFD4Core", "RFD4MLX",
                 .product(name: "MLX", package: "mlx-swift"),
-                .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ]
         ),

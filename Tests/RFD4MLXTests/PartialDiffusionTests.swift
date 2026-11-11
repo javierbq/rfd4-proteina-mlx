@@ -101,8 +101,15 @@ struct PartialDiffusionTests {
         let d = MLX.abs(got - want)
         let refMax = max(MLX.abs(want).max().item(Float.self), 1e-12)
         let rel = d.max().item(Float.self) / refMax
-        let detail = String(format: "%@: max |Δ| %.3e  max rel %.3e", label,
-                            d.max().item(Float.self), rel)
+        // A max-only report cannot tell one bad element from a bad tensor, and the
+        // two call for completely different responses. Count how many elements are
+        // actually off, so the summary distinguishes an outlier from a drift.
+        let n = d.size
+        let over = MLX.sum((d .> (tol * refMax)).asType(.int32)).item(Int32.self)
+        let detail = String(
+            format: "%@: max |Δ| %.3e  mean |Δ| %.3e  max rel %.3e  over tol %d/%d (%.2f%%)",
+            label, d.max().item(Float.self), d.mean().item(Float.self), rel,
+            Int(over), n, 100 * Double(over) / Double(n))
         #expect(rel <= tol, "\(detail)")
         if rel <= tol { print("ok   partial \(detail)") }
     }
@@ -378,9 +385,12 @@ struct PartialDiffusionTests {
             },
             noiseFor: { _, step, shape in byStep[step]?[shape.last!] })
 
-        for mode in ["bb_ca", "local_latents"] {
-            check(x[mode]!, try Self.entry(fx.xFinal[mode], "x_final \(mode)"),
-                  "trajectory \(mode)", tol: 5e-2)
-        }
+        // Per channel: the backbone carries the real gate, the latent a weaker one
+        // in half precision for the reason TrajectoryGate.partialLatent sets out.
+        check(x["bb_ca"]!, try Self.entry(fx.xFinal["bb_ca"], "x_final bb_ca"),
+              "trajectory bb_ca", tol: TrajectoryGate.endpoint)
+        check(x["local_latents"]!,
+              try Self.entry(fx.xFinal["local_latents"], "x_final local_latents"),
+              "trajectory local_latents", tol: TrajectoryGate.partialLatent)
     }
 }

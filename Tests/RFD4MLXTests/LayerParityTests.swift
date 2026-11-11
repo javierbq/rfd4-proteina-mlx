@@ -59,7 +59,7 @@ struct LayerParityTests {
     // MLXArray is not Sendable; the dictionary is built once and only read.
     nonisolated(unsafe) static let weights: Weights? = {
         guard let p = weightsPath else { return nil }
-        return try? Weights.load(URL(fileURLWithPath: p))
+        return try? ParityWeights.float32(p)
     }()
 
     /// Decode a fixture entry into an MLXArray, following a `ref` into `shared`.

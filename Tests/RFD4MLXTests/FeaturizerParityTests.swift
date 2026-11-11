@@ -59,7 +59,7 @@ struct FeaturizerParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip slot widths: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let f = try Featurizer(w)
         // If a declared slot width is wrong the sum will not match linear_out's
         // input dimension, which is the cheapest possible way to catch it.
@@ -75,7 +75,7 @@ struct FeaturizerParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip featurizer parity: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let f = try Featurizer(w)
         let b = try Self.batch(fx)
 

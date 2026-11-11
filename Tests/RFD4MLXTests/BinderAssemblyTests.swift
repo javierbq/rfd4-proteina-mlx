@@ -104,7 +104,7 @@ struct BinderAssemblyTests {
         conditioning.internalCoords = upstreamInternal
         system.conditioning = conditioning
 
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let f = try Featurizer(w)
         let b = Featurizer.Batch(
             xtBBCA: try Self.field("x_t.bb_ca"),

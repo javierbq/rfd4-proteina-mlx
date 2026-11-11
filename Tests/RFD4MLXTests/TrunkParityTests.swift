@@ -74,7 +74,7 @@ struct TrunkParityTests {
             print("skip whole-trunk parity: set RFD4_WEIGHTS to the checkpoint")
             return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let trunk = try Trunk(w)
 
         let sInit = Self.array(fx.inputs["s_init"]!)
@@ -120,8 +120,7 @@ struct TrunkParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip recycle-depth parity: set RFD4_WEIGHTS"); return
         }
-        let trunk = try Trunk(Weights.load(
-            URL(fileURLWithPath: (p as NSString).expandingTildeInPath)))
+        let trunk = try Trunk(ParityWeights.float32(p))
 
         let out = trunk(
             sInit: Self.array(fx.inputs["s_init"]!), zInit: Self.array(fx.inputs["z_init"]!),
@@ -152,7 +151,7 @@ struct TrunkParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let trunk = try Trunk(w)
         #expect(trunk.layers.count == 14)
         #expect(trunk.pairUpdates.count == 13)

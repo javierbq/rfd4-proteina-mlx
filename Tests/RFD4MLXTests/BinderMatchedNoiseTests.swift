@@ -197,11 +197,13 @@ struct BinderMatchedNoiseTests {
         // by the endpoint passes an endpoint-only check: 3% at step 30 that decays to
         // 1% by step 59 is invisible at 5e-2. This is the number that localises such a
         // fault, and computing it and discarding it was worse than not computing it.
-        // The bound is tight because the measured worst step is 4.1e-06.
+        // The bound is per precision (see TrajectoryGate.perStep): tight in fp32,
+        // where the measured worst step is 4.1e-06, and the endpoint gate itself in
+        // half precision, where it is 1.9e-02.
         let worstDetail = String(format: "diverged mid-trajectory at step %d "
                                  + "(max rel %.3e) even if it recovered by the end",
                                  worstPerStep.step, worstPerStep.rel)
-        #expect(worstPerStep.rel <= 1e-3, "\(worstDetail)")
+        #expect(worstPerStep.rel <= TrajectoryGate.perStep, "\(worstDetail)")
         for mode in ["bb_ca", "local_latents"] {
             let got = x[mode]!
             let want = try Self.entry(fx.xFinal[mode], "x_final.\(mode)")
@@ -212,7 +214,8 @@ struct BinderMatchedNoiseTests {
                          + "(|ref| max %.3e)", mode, d.max().item(Float.self), rel, refMax))
             // 60 steps of compounding, each feeding the next through the network, on
             // a conditioned two-chain system.
-            #expect(rel <= 5e-2, "\(mode) diverged from upstream's own trajectory")
+            #expect(rel <= TrajectoryGate.endpoint,
+                    "\(mode) diverged from upstream's own trajectory")
         }
     }
 }

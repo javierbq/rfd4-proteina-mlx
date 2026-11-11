@@ -1,0 +1,36 @@
+--- fraction 0.3 seed 7001
+chain A  100 res  CA rmsd in-place   0.020  fitted   0.014  sequence identity   99.0% (99/100)
+worst fitted CA rmsd 0.014
+--- fraction 0.3 seed 7002
+chain A  100 res  CA rmsd in-place   0.013  fitted   0.013  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.013
+--- fraction 0.3 seed 7003
+chain A  100 res  CA rmsd in-place   0.015  fitted   0.015  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.015
+--- fraction 0.5 seed 7001
+chain A  100 res  CA rmsd in-place   0.053  fitted   0.053  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.053
+--- fraction 0.5 seed 7002
+chain A  100 res  CA rmsd in-place   0.029  fitted   0.029  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.029
+--- fraction 0.5 seed 7003
+chain A  100 res  CA rmsd in-place   0.028  fitted   0.028  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.028
+--- fraction 0.7 seed 7001
+chain A  100 res  CA rmsd in-place   0.039  fitted   0.034  sequence identity   98.0% (98/100)
+worst fitted CA rmsd 0.034
+--- fraction 0.7 seed 7002
+chain A  100 res  CA rmsd in-place   0.064  fitted   0.064  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.064
+--- fraction 0.7 seed 7003
+chain A  100 res  CA rmsd in-place   0.036  fitted   0.035  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.035
+--- fraction 0.9 seed 7001
+chain A  100 res  CA rmsd in-place   0.026  fitted   0.019  sequence identity   99.0% (99/100)
+worst fitted CA rmsd 0.019
+--- fraction 0.9 seed 7002
+chain A  100 res  CA rmsd in-place   0.037  fitted   0.035  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.035
+--- fraction 0.9 seed 7003
+chain A  100 res  CA rmsd in-place   0.029  fitted   0.028  sequence identity  100.0% (100/100)
+worst fitted CA rmsd 0.028

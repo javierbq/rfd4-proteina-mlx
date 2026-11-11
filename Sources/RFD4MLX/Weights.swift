@@ -48,16 +48,62 @@ public struct Weights {
     /// and the error compounds. The matched-noise harness is the instrument that
     /// settles whether a half format is good enough, by driving both precisions down
     /// upstream's own trajectory so what remains is precision rather than sampling.
-    /// Until that has been run, fp32 stays the default.
+    ///
+    /// ## fp16 has now been validated end to end
+    ///
+    /// Driven down upstream's own noise, 60 steps, final state against upstream's:
+    ///
+    ///     de novo       fp32 rel 1.1e-06    fp16 rel 8.4e-04      (gate 5e-2)
+    ///     binder        fp32 rel 1.4e-06    fp16 rel 6.4e-03      (gate 5e-2)
+    ///
+    /// And on the design campaign that matters — 24 seeds, one contig, the same
+    /// binary, one precision each, paired on the seed:
+    ///
+    ///     per-design    fp32 104.3 s        fp16  80.1 s          1.30x
+    ///     peak memory   fp32   2.31 GB      fp16   1.15 GB        2.01x
+    ///     designable    fp32 21/24          fp16 21/24            differs at no seed
+    ///
+    /// 20 of those 24 seeds produce THE SAME DESIGN in both precisions — median
+    /// 0.017 A CA RMSD, worst 0.101 A, 95-100% sequence identity. The other four
+    /// land on a neighbouring sample (0.57-2.79 A), which is what a chaotic sampler
+    /// does when a 1e-3 perturbation crosses a basin boundary; the oracle scores
+    /// them as equivalent, and the one seed that fails designability fails in both.
+    ///
+    /// So fp16 is not bit-equivalent to fp32 and never will be. It is
+    /// DISTRIBUTIONALLY equivalent, usually sample-identical, 1.3x faster, and half
+    /// the peak memory — and on a machine where running out of GPU memory aborts
+    /// the host process rather than throwing, halving the peak is a safety
+    /// property, not an optimization.
+    ///
+    /// The one place the fixtures complain is the partial-diffusion trajectory,
+    /// where fp16 exceeds the 5e-2 gate on local_latents (max rel 2.6e-01). That is
+    /// 10 elements of 7200, with mean |d| 1.4e-03 and the backbone inside 0.13 A,
+    /// and it does not survive the decoder: re-running partial diffusion in both
+    /// precisions over fractions 0.3-0.9, three seeds each, agrees to 0.064 A CA
+    /// RMSD at worst (median 0.029) and 98-100% sequence identity. The disagreement
+    /// does not grow with the fraction — 0.9 re-runs three times as much of the
+    /// trajectory as 0.3 and lands no further away — which is what rules out a
+    /// compounding precision floor. The fixture tolerance is measuring the latent,
+    /// not the structure.
     public enum Precision: String, Sendable {
         case float32, float16, bfloat16
 
-        /// `RFD4_DTYPE=fp16` or `=bf16` switches a run over without a rebuild.
+        /// The default for a bare checkpoint, overridable with `RFD4_DTYPE` without
+        /// a rebuild.
+        ///
+        /// fp16, on the evidence above: same designs, 1.3x faster, half the peak
+        /// memory. `RFD4_DTYPE=fp32` opts back out, which is what to reach for when
+        /// a result has to be reproducible against the fixtures rather than fast.
+        ///
+        /// This governs a bare `.safetensors` only. A pack declares its own
+        /// precision and `RFD4Pack` passes that explicitly, so what is on disk is
+        /// what gets loaded and this cannot reinterpret it.
         public static var fromEnvironment: Precision {
             switch ProcessInfo.processInfo.environment["RFD4_DTYPE"]?.lowercased() {
-            case "fp16", "f16", "float16": return .float16
+            case "fp32", "f32", "float32": return .float32
             case "bf16", "bfloat16": return .bfloat16
-            default: return .float32
+            case "fp16", "f16", "float16": return .float16
+            default: return .float16
             }
         }
 

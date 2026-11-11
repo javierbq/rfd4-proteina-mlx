@@ -64,7 +64,7 @@ struct DecoderParityTests {
             print("skip decoder parity: set RFD4_WEIGHTS to the checkpoint")
             return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let decoder = try Decoder(w)
 
         let out = decoder(
@@ -104,7 +104,7 @@ struct DecoderParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let decoder = try Decoder(w)
         #expect(decoder.layers.count == 12)
         // use_attn_pair_bias is false, so no layer has a pair-bias projection.
@@ -128,7 +128,7 @@ extension DecoderParityTests {
             print("skip decoder features: set RFD4_WEIGHTS"); return
         }
         let decoder = try Decoder(
-            Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath)))
+            ParityWeights.float32(p))
 
         let got = decoder.sequenceFeatures(
             latents: Self.array(try #require(fx.inputs["z_latent"])),

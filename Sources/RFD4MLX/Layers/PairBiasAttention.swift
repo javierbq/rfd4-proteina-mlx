@@ -84,26 +84,33 @@ public struct PairBiasAttention {
         // Pair bias: [b, n, n, pairDim] -> [b, n, n, h] -> [b, h, n, n].
         // With no pair track upstream builds a zero bias and masks it, so the
         // attention is mask-only; the shape is the same either way.
+        // 🔴 EVERY SCALAR HERE CARRIES A DTYPE, and a float32 one silently widens the
+        // whole block. `MLXArray(Float)` is a float32 array, not a weak scalar: in
+        // half precision `sim * scale` promoted to float32 and every layer after it
+        // ran wide, so `RFD4_DTYPE=fp16` cast the checkpoint and bought nothing but a
+        // smaller resident model. The probe that found it: half going into layer 0 and
+        // float32 coming out, on the FIRST attention of the first pass.
+        let dtype = qkvW.dtype
         var attnBias: MLXArray
         if let pairFeats, let pairNorm, let biasW {
             attnBias = linear(pairNorm(pairFeats), biasW).transposed(0, 3, 1, 2)
         } else {
             let n = nodeFeats.dim(1)
-            attnBias = MLX.zeros([nodeFeats.dim(0), heads, n, n])
+            attnBias = MLX.zeros([nodeFeats.dim(0), heads, n, n], dtype: dtype)
         }
 
         // mask [b, n, n] -> [b, 1, n, n]
         let maskExpanded = pairMask.expandedDimensions(axis: 1)
         let allowed = maskExpanded .> 0
-        attnBias = MLX.where(allowed, attnBias, MLXArray(Self.negInf))
+        attnBias = MLX.where(allowed, attnBias, MLXArray(Self.negInf).asType(dtype))
 
         // A row masked at every column would softmax over all -1e4 and contribute
         // garbage; upstream zeroes the bias for those rows instead.
         let rowHasAny = MLX.sum(maskExpanded, axis: -1, keepDims: true) .> 0
-        attnBias = MLX.where(rowHasAny, attnBias, MLXArray(Float(0)))
+        attnBias = MLX.where(rowHasAny, attnBias, MLXArray(Float(0)).asType(dtype))
 
         // einsum("b h i d, b h j d -> b h i j")
-        let scale = MLXArray(pow(Float(dimHead), -0.5))
+        let scale = MLXArray(pow(Float(dimHead), -0.5)).asType(dtype)
         let sim = MLX.matmul(qh, kh.transposed(0, 1, 3, 2)) * scale + attnBias
         let attn = MLX.softMax(sim, axis: -1)
 

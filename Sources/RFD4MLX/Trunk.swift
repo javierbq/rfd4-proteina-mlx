@@ -140,19 +140,36 @@ public struct Trunk {
         sInit: MLXArray, zInit: MLXArray, cond: MLXArray, mask: MLXArray,
         emitBBCA: MLXArray, emitLocalLatents: MLXArray, nRecycle: Int = 1
     ) -> Output {
-        let (s, z) = runTrunk(sInit: sInit, zInit: zInit, cond: cond,
-                              mask: mask, nRecycle: nRecycle)
+        // The activations follow the weights, and they have to: MLX promotes a mixed
+        // matmul to its WIDER operand, so casting the checkpoint alone leaves every
+        // GEMM running in float32 and buys nothing but a smaller resident model.
+        // Measured at n=226 — weights-only fp16 moved `trimult.projections` from
+        // 37.25 s to 37.43 s, i.e. not at all, while peak memory fell 1.81 to
+        // 1.48 GB. The pair track is what the trunk is made of (39 MB a copy at this
+        // size, read and rewritten by every triangle), so it is the thing that has to
+        // be half for half to mean anything.
+        let dtype = sCycleProj.dtype
+        let (s, z) = runTrunk(sInit: sInit.asType(dtype), zInit: zInit.asType(dtype),
+                              cond: cond.asType(dtype), mask: mask.asType(dtype),
+                              nRecycle: nRecycle)
 
-        let latents = localLatentsHead(s) * emitLocalLatents.expandedDimensions(axis: -1)
-        let ca = caHead(s) * emitBBCA.expandedDimensions(axis: -1)
-        let seq = sequenceHead.map { $0(s) * mask.expandedDimensions(axis: -1) }
+        let maskT = mask.asType(dtype)
+        let latents = localLatentsHead(s) * emitLocalLatents.asType(dtype).expandedDimensions(axis: -1)
+        let ca = caHead(s) * emitBBCA.asType(dtype).expandedDimensions(axis: -1)
+        let seq = sequenceHead.map { $0(s) * maskT.expandedDimensions(axis: -1) }
 
         // Bilinear outer product over all token pairs, scaled by tokenDim^-0.5.
         let q = linear(s, insertionQ)
         let k = linear(s, insertionK)
         let insertion = MLX.matmul(q, k.transposed(0, 2, 1)) * insertionScale
 
-        return Output(bbCA: ca, localLatents: latents, sequenceLogits: seq,
-                      insertionLogits: insertion, s: s, z: z)
+        // Back to float32 at the boundary. The flow sampler integrates these over 60
+        // steps and that accumulation stays in full precision; only the trunk's
+        // interior is half. `s` and `z` keep the compute dtype — they are fed back
+        // through the recycle projections, which are half too.
+        return Output(bbCA: ca.asType(.float32),
+                      localLatents: latents.asType(.float32),
+                      sequenceLogits: seq.map { $0.asType(.float32) },
+                      insertionLogits: insertion.asType(.float32), s: s, z: z)
     }
 }

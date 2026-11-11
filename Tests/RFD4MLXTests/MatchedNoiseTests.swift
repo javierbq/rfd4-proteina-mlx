@@ -107,7 +107,8 @@ struct MatchedNoiseTests {
                          + "(|ref| max %.3e)", mode, d.max().item(Float.self),
                          rel, refMax))
             // 60 steps of compounding, each feeding the next through the network.
-            #expect(rel <= 5e-2, "\(mode) diverged from upstream's own trajectory")
+            #expect(rel <= TrajectoryGate.endpoint,
+                    "\(mode) diverged from upstream's own trajectory")
         }
     }
 }

@@ -44,7 +44,7 @@ struct PredictStepTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip predict parity: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let featurizer = try Featurizer(w)
         let trunk = try Trunk(w)
         let system = Generator.System.deNovo(length: fx.n)

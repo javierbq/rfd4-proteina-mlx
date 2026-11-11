@@ -200,7 +200,7 @@ struct BinderFeaturizerTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip binder featurizer parity: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let f = try Featurizer(w)
         let b = try Self.batch(fx)
 

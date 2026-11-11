@@ -136,7 +136,7 @@ struct EncoderParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip encoder widths: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let e = try Encoder(w)
         #expect(e.seqFactory.inputWidth == 1587,
                 "linear_out expects \(e.seqFactory.inputWidth), the features make 1587")
@@ -147,7 +147,7 @@ struct EncoderParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip encoder features: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let e = try Encoder(w)
         let s = try Self.structure()
 
@@ -171,7 +171,7 @@ struct EncoderParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip encoder parity: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let e = try Encoder(w)
         let s = try Self.structure()
         let fx = try #require(Self.fixture)
@@ -220,7 +220,7 @@ struct EncoderParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let out = try Encoder(w)(s)
         #expect(MLX.all(MLX.isNaN(out.mean)).item(Bool.self),
                 "one unresolved atom did not poison the whole latent; if that is no longer true the guard can be relaxed")
@@ -233,7 +233,7 @@ struct EncoderParityTests {
         guard let p = ProcessInfo.processInfo.environment["RFD4_WEIGHTS"], !p.isEmpty else {
             print("skip reparameterisation: set RFD4_WEIGHTS"); return
         }
-        let w = try Weights.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+        let w = try ParityWeights.float32(p)
         let e = try Encoder(w)
         let s = try Self.structure()
 

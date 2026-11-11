@@ -61,7 +61,28 @@ public struct Weights {
             }
         }
 
-        var dtype: DType {
+        /// The spelling a pack manifest uses, which is the short one the rest of
+        /// this ecosystem writes — rfd3's manifest says `"fp32"`, not `"float32"`.
+        /// Both spellings parse, so a manifest written either way loads.
+        public init?(manifestName: String) {
+            switch manifestName.lowercased() {
+            case "fp32", "f32", "float32": self = .float32
+            case "fp16", "f16", "float16": self = .float16
+            case "bf16", "bfloat16": self = .bfloat16
+            default: return nil
+            }
+        }
+
+        /// What `init(manifestName:)` round-trips to, for an exporter writing one.
+        public var manifestName: String {
+            switch self {
+            case .float32: "fp32"
+            case .float16: "fp16"
+            case .bfloat16: "bf16"
+            }
+        }
+
+        public var dtype: DType {
             switch self {
             case .float32: .float32
             case .float16: .float16
@@ -72,16 +93,27 @@ public struct Weights {
 
     public static func load(_ url: URL, precision: Precision = .fromEnvironment) throws
         -> Weights {
-        let raw = try MLX.loadArrays(url: url)
-        guard precision != .float32 else { return Weights(arrays: raw) }
-        // Cast only the floating-point tensors. An index or mask stored as an
-        // integer stays what it is; casting one to bfloat16 would silently round
-        // large indices.
-        var cast = [String: MLXArray](minimumCapacity: raw.count)
-        for (key, value) in raw {
+        Weights(arrays: narrowed(try MLX.loadArrays(url: url), to: precision))
+    }
+
+    /// Narrow a checkpoint's float tensors to `precision`, leaving everything else
+    /// alone.
+    ///
+    /// Cast only the floating-point tensors. An index or mask stored as an integer
+    /// stays what it is; casting one to bfloat16 would silently round large indices.
+    ///
+    /// This is a separate function so that the weight exporter can call it rather
+    /// than reimplement it. A pack is supposed to be exactly what `load` would have
+    /// produced in memory, written down — and two copies of this rule would be two
+    /// chances for the file on disk to stop matching the thing it replaces.
+    public static func narrowed(_ arrays: [String: MLXArray], to precision: Precision)
+        -> [String: MLXArray] {
+        guard precision != .float32 else { return arrays }
+        var cast = [String: MLXArray](minimumCapacity: arrays.count)
+        for (key, value) in arrays {
             cast[key] = value.dtype == .float32 ? value.asType(precision.dtype) : value
         }
-        return Weights(arrays: cast)
+        return cast
     }
 
     /// A view scoped to `path`, so a layer reads `"weight"` rather than its full path.

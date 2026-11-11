@@ -65,6 +65,16 @@ let package = Package(
             name: "RFD4MLXCLI",
             dependencies: ["RFD4Core", "RFD4MLX"]
         ),
+        // Builds the installable weight pack. An executable rather than a script so
+        // the cast it writes is literally `Weights.narrowed`, the same function the
+        // loader uses, instead of a second implementation of that rule.
+        .executableTarget(
+            name: "RFD4Export",
+            dependencies: [
+                "RFD4Core", "RFD4MLX",
+                .product(name: "MLX", package: "mlx-swift"),
+            ]
+        ),
         .testTarget(
             name: "RFD4CoreTests",
             dependencies: ["RFD4Core"],

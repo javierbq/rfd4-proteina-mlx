@@ -45,12 +45,18 @@ let ns = ints(env("BN")).isEmpty ? [155] : ints(env("BN"))
 let reps = Int(env("BREPS") ?? "6")!
 let mode = env("BMODE") ?? "trunk"
 
+// The synthetic checkpoint follows RFD4_DTYPE, exactly as a real one does through
+// `Weights.load`. Without this the bench can only ever report fp32 numbers, and
+// the fp16 peak -- the one that decides what sizes are safe to offer -- would be
+// an extrapolation rather than a measurement.
+let benchDType = Weights.Precision.fromEnvironment.dtype
+
 var rngKey = MLXRandom.key(12345)
 @MainActor
 func rnd(_ shape: [Int], _ scale: Float = 0.05) -> MLXArray {
     let k = MLXRandom.split(key: rngKey, into: 2)
     rngKey = k[0]
-    return MLXRandom.normal(shape, key: k[1]) * scale
+    return (MLXRandom.normal(shape, key: k[1]) * scale).asType(benchDType)
 }
 
 // MARK: - synthetic checkpoint
@@ -137,7 +143,8 @@ func inputsFor(_ b: Int, _ n: Int) -> In {
     let k = "\(b)x\(n)"
     if let v = inputs[k] { return v }
     let v = In(s: rnd([b, n, TOK], 1.0), z: rnd([b, n, n, CZ], 1.0),
-               cond: rnd([b, n, CCOND], 1.0), mask: MLX.ones([b, n]))
+               cond: rnd([b, n, CCOND], 1.0),
+               mask: MLX.ones([b, n]).asType(benchDType))
     MLX.eval(v.s, v.z, v.cond, v.mask)
     inputs[k] = v
     return v
@@ -186,6 +193,14 @@ func work(_ i: In) -> [MLXArray] {
 
 if mode == "mem" {
     let b = batches[0], n = ns[0]
+    // BCACHE=<GB> caps MLX's allocator cache. Peak memory counts cached buffers,
+    // not just live ones, so a "peak" that is mostly reclaimable cache is a very
+    // different thing from a working set of the same size -- and the only way to
+    // tell them apart is to cap the cache and see what the peak does.
+    if let gb = env("BCACHE").flatMap({ Double($0) }) {
+        MLX.GPU.set(cacheLimit: Int(gb * 1e9))
+        print(String(format: "cache limit %.1f GB", gb))
+    }
     let i = inputsFor(b, n)
     MLX.eval(trunkPass(i))            // warm
     MLX.GPU.clearCache()

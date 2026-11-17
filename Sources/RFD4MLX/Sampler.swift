@@ -154,6 +154,11 @@ public enum Sampler {
     /// - Parameter noiseFor: supplies the per-step noise. Returning `nil` makes the
     ///   whole trajectory deterministic, which is what a matched-noise comparison or
     ///   a reproducible run wants.
+    /// - Parameter shouldCancel: polled once per step. This is the ONLY place a
+    ///   generation can be stopped: the whole call chain is synchronous, so there is no
+    ///   `Task` to cancel and no await point to cancel at. Polled AFTER the step's
+    ///   `eval` barrier rather than before the step, so the worst case is one step of
+    ///   latency — which on a real target is seconds, not minutes.
     public static func simulate(
         x0: [String: MLXArray],
         schedule: FlowSchedule,
@@ -164,8 +169,9 @@ public enum Sampler {
         predict: (_ x: [String: MLXArray], _ t: [String: Float], _ recycleDepth: Int)
             -> [String: MLXArray],
         noiseFor: ((_ dataMode: String, _ step: Int, _ shape: [Int]) -> MLXArray?)? = nil,
-        onStep: ((_ step: Int, _ x: [String: MLXArray]) -> Void)? = nil
-    ) -> [String: MLXArray] {
+        onStep: ((_ step: Int, _ x: [String: MLXArray]) -> Void)? = nil,
+        shouldCancel: (() -> Bool)? = nil
+    ) throws -> [String: MLXArray] {
         var x = x0
         // Dictionary iteration order is NOT stable across processes in Swift, and
         // the modalities draw from a shared noise stream in this order. Iterating
@@ -212,7 +218,38 @@ public enum Sampler {
             // which is exactly the wrong memory profile for a phone.
             MLX.eval(modes.compactMap { x[$0] })
             onStep?(stepIndex, x)
+            // After `eval` and after `onStep`, so a cancelled run has reported the step
+            // it actually completed. Before the next `predict`, so cancelling costs at
+            // most one more trunk pass rather than the rest of the trajectory.
+            if shouldCancel?() == true { throw GenerationCancelled(step: stepIndex,
+                                                                  of: nsteps) }
         }
         return x
     }
+}
+
+/// Thrown out of ``Sampler/simulate(x0:schedule:nsteps:recycleDepths:params:emitMasks:predict:noiseFor:onStep:shouldCancel:)``
+/// when the caller's `shouldCancel` returns true.
+///
+/// A distinct type rather than a case on an existing error enum, because a host has to
+/// tell "the user stopped this" apart from "this failed" by `catch` and nothing else —
+/// a cancelled design is not a failed design, and reporting it as one puts a red card in
+/// front of someone who pressed Cancel. The step it stopped at is carried so a progress
+/// surface can say where rather than only that.
+public struct GenerationCancelled: Error, CustomStringConvertible, LocalizedError {
+    /// Zero-based index of the last step that COMPLETED before the cancel was seen.
+    public let step: Int
+    /// Steps the trajectory would have run.
+    public let total: Int
+
+    public init(step: Int, of total: Int) {
+        self.step = step
+        self.total = total
+    }
+
+    public var description: String {
+        "generation cancelled after step \(step + 1) of \(total)"
+    }
+
+    public var errorDescription: String? { description }
 }

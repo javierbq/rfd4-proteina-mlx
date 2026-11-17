@@ -71,7 +71,7 @@ struct MatchedNoiseTests {
 
         let schedule = try sampleSchedule(nsteps: fx.nsteps,
                                           modalities: ModalityConfig.released)
-        let x = Sampler.simulate(
+        let x = try Sampler.simulate(
             x0: ["bb_ca": Self.arr(fx.x0["bb_ca"]!),
                  "local_latents": Self.arr(fx.x0["local_latents"]!)],
             schedule: schedule, nsteps: fx.nsteps, recycleDepths: fx.depths,

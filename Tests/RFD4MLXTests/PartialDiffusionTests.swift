@@ -361,7 +361,7 @@ struct PartialDiffusionTests {
                                       modalities: ModalityConfig.released)
         let tail = try PartialDiffusion.tail(of: full, nsteps: fx.nsteps)
 
-        let x = Sampler.simulate(
+        let x = try Sampler.simulate(
             x0: ["bb_ca": try Self.entry(fx.xt["bb_ca"], "x_t bb_ca"),
                  "local_latents": try Self.entry(fx.xt["local_latents"], "x_t latents")],
             schedule: tail, nsteps: fx.nsteps,

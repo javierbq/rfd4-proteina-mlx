@@ -155,7 +155,7 @@ struct BinderMatchedNoiseTests {
                                           modalities: ModalityConfig.released)
         var worstPerStep: (step: Int, rel: Float) = (-1, 0)
 
-        let x = Sampler.simulate(
+        let x = try Sampler.simulate(
             x0: ["bb_ca": try Self.entry(fx.x0["bb_ca"], "x0.bb_ca"),
                  "local_latents": try Self.entry(fx.x0["local_latents"], "x0.local_latents")],
             schedule: schedule, nsteps: fx.nsteps, recycleDepths: fx.depths,

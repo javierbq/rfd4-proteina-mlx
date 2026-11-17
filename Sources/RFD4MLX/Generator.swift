@@ -176,7 +176,8 @@ public struct Generator {
         seed: UInt64 = 0,
         encodeDeterministically: Bool = false,
         stochastic: Bool = true,
-        onStep: ((Int, Int) -> Void)? = nil
+        onStep: ((Int, Int) -> Void)? = nil,
+        shouldCancel: (() -> Bool)? = nil
     ) throws -> Result {
         // An all-NaN latent is not a degraded answer; refuse before spending the run.
         try structure.validate()
@@ -213,7 +214,7 @@ public struct Generator {
 
         var pass = 0
         let depths = Array(repeating: 1, count: nsteps)
-        let xFinal = Sampler.simulate(
+        let xFinal = try Sampler.simulate(
             x0: corrupted.xt, schedule: tail, nsteps: nsteps, recycleDepths: depths,
             params: Sampler.StepParams.released, emitMasks: emitMasks,
             predict: { x, t, depth in
@@ -227,7 +228,8 @@ public struct Generator {
                 return ["bb_ca": out.bbCA, "local_latents": out.localLatents]
             },
             noiseFor: { _, _, shape in stochastic ? draw(shape) : nil },
-            onStep: { step, _ in onStep?(step, pass) })
+            onStep: { step, _ in onStep?(step, pass) },
+            shouldCancel: shouldCancel)
 
         let decoded = decoder(
             seqInit: decoder.sequenceFeatures(
@@ -257,7 +259,8 @@ public struct Generator {
         seed: UInt64 = 0,
         stochastic: Bool = true,
         recycleDepths depthOverride: [Int]? = nil,
-        onStep: ((Int, Int) -> Void)? = nil
+        onStep: ((Int, Int) -> Void)? = nil,
+        shouldCancel: (() -> Bool)? = nil
     ) throws -> Result {
         let nsteps = ReleasedRecycleStrategy.nsteps
         let schedule = try sampleSchedule(nsteps: nsteps, modalities: ModalityConfig.released)
@@ -286,7 +289,7 @@ public struct Generator {
         ]
 
         var pass = 0
-        let xFinal = Sampler.simulate(
+        let xFinal = try Sampler.simulate(
             x0: x0, schedule: schedule, nsteps: nsteps, recycleDepths: depths,
             params: Sampler.StepParams.released,
             emitMasks: ["bb_ca": system.emitBBCA, "local_latents": system.emitLocalLatents],
@@ -317,7 +320,8 @@ public struct Generator {
                                  consec.max().item(Float.self)))
                 }
                 onStep?(step, pass)
-            }
+            },
+            shouldCancel: shouldCancel
         )
 
         // Feed the decoder what the flow model actually produced. Passing zeros

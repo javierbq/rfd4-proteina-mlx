@@ -10,3 +10,8 @@ weights/
 # NOTE: do NOT add a bare `fixtures/` rule here. git on macOS matches ignore
 # patterns case-insensitively, so it also swallows Tests/RFD4CoreTests/Fixtures/,
 # which is committed parity data the test target loads via Bundle.module.
+
+# Built weight packs and their zips. These are release ASSETS, uploaded to a
+# GitHub release; a 807 MB blob in git history cannot be removed later without
+# rewriting every clone.
+dist/

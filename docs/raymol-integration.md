@@ -19,16 +19,25 @@ calls, not a reimplementation of it — writes `rfd4_core.safetensors` plus
 the manifest, and then loads its own output back through `RFD4Pack` before
 reporting success.
 
-As built on 2026-11-11:
+As built and PUBLISHED on 2026-11-17:
 
 | | |
 |---|---|
 | source checkpoint | `model.safetensors`, sha256 `5b549dd6…c68fb0` |
 | tensors / parameters | 1257 / 435,622,465 |
 | precision | fp16 (see `validation/quality/fp16.md`) |
-| `rfd4_core.safetensors` | 871,414,786 bytes |
-| zipped | 807,137,648 bytes |
+| `rfd4_core.safetensors` | 871,414,812 bytes, sha256 `e151e431…2cb3ef26` |
+| zipped | 807,122,869 bytes, sha256 `c07d977c…8047a03d` |
 | export time | 2.7 s |
+
+**The pack is not byte-reproducible, by design.** `manifest.json` carries an
+`exportedAt` timestamp, so every export yields a different archive digest. Any
+sha256 recorded anywhere therefore belongs to ONE build — which is why the
+bundle's digest is taken from the uploaded asset rather than from a rebuild.
+The numbers above supersede an earlier 2026-11-11 build (871,414,786 /
+807,137,648): commit a7a8fc5 changed the recorded `sourceCheckpoint` from the
+symlink's target to its name, which moved the safetensors `__metadata__` by 26
+bytes.
 
 **Verified end to end**: a binder design generated from the pack directory is
 byte-identical in its atom records to one generated from the bare checkpoint at
@@ -80,8 +89,11 @@ over packed uint32 would produce noise rather than an error.
 
 This repo cannot do these; they are listed so the remaining work is visible.
 
-1. **Upload the zip** as a release asset, then hash **the asset you downloaded**,
-   not the local build.
+1. ~~**Upload the zip** as a release asset, then hash **the asset you
+   downloaded**, not the local build.~~ **DONE** (2026-11-17). The repo is
+   public at `javierbq/rfd4-proteina-mlx`, tagged `0.1.0`, and the asset is
+   released under `weights-rfd4-v1`. The digest below was taken from a fresh
+   `curl` of the published URL and is byte-identical to the local build.
 2. **`modules/pymol/generators/rfd4.py`** — an `RFD4Generator` modelled on
    `RFD3Generator`, carrying:
 
@@ -91,16 +103,11 @@ This repo cannot do these; they are listed so the remaining work is visible.
        version='v1',
        url='https://github.com/javierbq/rfd4-proteina-mlx/releases/download/'
            'weights-rfd4-v1/rfd4-proteina-mlx-fp16-v1.zip',
-       sha256='<hash of the uploaded asset>',
-       size=807_137_648,
+       sha256='c07d977c0c130f7760256f93787f73efde699e17cb526ec6ef935f5d8047a03d',
+       size=807_122_869,
        members=('manifest.json', 'rfd4_core.safetensors'),
    )
    ```
-
-   The `size` and the local digest
-   `6727273dc20e2fbf5d8f3abf5c27cd1faa25b7d5a2817f84539a774363883e82` are from
-   the build above; re-hash after upload regardless, since what matters is the
-   bytes GitHub serves.
 3. **One line** in `generators/__init__.py:_register_builtins`.
 4. **A Swift `RFD4JobManager`** conforming to `InferenceRuntime`, plus the MLX
    cache-limit policy type registered under its own owner name, plus a size guard.
@@ -109,6 +116,8 @@ This repo cannot do these; they are listed so the remaining work is visible.
    only).
 7. **`project.yml`** — a package entry pinning `mlx-swift` **exact 0.31.6** to
    match MPNNKit, BoltzMLX and RFD3MLX, plus the two target-dependency entries.
+   The package resolves from `https://github.com/javierbq/rfd4-proteina-mlx.git`
+   at `0.1.0`.
 
 ### The size guard needs these numbers
 

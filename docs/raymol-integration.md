@@ -85,17 +85,17 @@ size, instead of a new schema that strands installed packs. A pack that sets it
 is refused while there is no quantized matmul path, because running dense matmuls
 over packed uint32 would produce noise rather than an error.
 
-## Still to do, in the RayMol repo
+## The RayMol side — DONE (2026-11-17)
 
-This repo cannot do these; they are listed so the remaining work is visible.
+All of it landed on branch `feat/rfd4-runtime` in `javierbq/RayMol`, in three
+commits. Kept here because this is where the contract between the two repos is
+written down, and a reader of this file needs to know which side owns what.
 
-1. ~~**Upload the zip** as a release asset, then hash **the asset you
-   downloaded**, not the local build.~~ **DONE** (2026-11-17). The repo is
-   public at `javierbq/rfd4-proteina-mlx`, tagged `0.1.0`, and the asset is
-   released under `weights-rfd4-v1`. The digest below was taken from a fresh
-   `curl` of the published URL and is byte-identical to the local build.
-2. **`modules/pymol/generators/rfd4.py`** — an `RFD4Generator` modelled on
-   `RFD3Generator`, carrying:
+1. **The release asset.** Public at `javierbq/rfd4-proteina-mlx`, tagged
+   `0.1.0`, asset `weights-rfd4-v1`. The digest below was taken from a fresh
+   `curl` of the published URL, not from the file that was uploaded, and came
+   back byte-identical.
+2. **`modules/pymol/generators/rfd4.py`** — `RFD4Generator`, carrying:
 
    ```python
    weight_bundle = WeightBundle(
@@ -108,16 +108,56 @@ This repo cannot do these; they are listed so the remaining work is visible.
        members=('manifest.json', 'rfd4_core.safetensors'),
    )
    ```
-3. **One line** in `generators/__init__.py:_register_builtins`.
-4. **A Swift `RFD4JobManager`** conforming to `InferenceRuntime`, plus the MLX
-   cache-limit policy type registered under its own owner name, plus a size guard.
-5. **One line** in `InferenceRouter.runtimes`, macOS-filtered.
-6. **`RAYMOL_PREDICT_RUNTIMES`** in `PyMOLBridge.mm` gains `rfd4` (macOS line
-   only).
-7. **`project.yml`** — a package entry pinning `mlx-swift` **exact 0.31.6** to
-   match MPNNKit, BoltzMLX and RFD3MLX, plus the two target-dependency entries.
-   The package resolves from `https://github.com/javierbq/rfd4-proteina-mlx.git`
-   at `0.1.0`.
+3. **`generators/__init__.py:_register_builtins`** registers it. `binder_design`
+   needed no change — it already resolves its first argument through the
+   registry, so `binder_design rfd4, ...` works.
+4. **`RFD4JobManager`**, plus `RFD4Runtime` (cache ceiling registered under the
+   owner name `"RFD4"`, never `"RFD3"`) and `RFD4SizeGuard`.
+5. **`InferenceRouter.runtimes`** gains it, macOS-filtered.
+6. **`RAYMOL_PREDICT_RUNTIMES`** in `PyMOLBridge.mm` is now
+   `"boltz,protenix,rfd3,rfd4"` on the macOS line only.
+7. **`project.yml`** links BOTH products — `RFD4Core` for `Vec3` and
+   `ReleasedRecycleStrategy`, `RFD4MLX` for the rest — at `exactVersion: 0.1.0`.
+   XcodeGen spells an exact pin `exactVersion`; SPM's `exact` is rejected by its
+   spec parser.
+
+### Four things the RayMol side could not simply copy from rfd3
+
+Recorded because each one is a silent wrong answer if the copy is made blindly.
+
+* **`target_drift_max` must NOT be reused.** It declares `lo=0` and is
+  documented as "0.000 A on a correct run, a bug on any other", because
+  RFdiffusion3 holds the target fixed. This model generates its target, so a
+  correct run reads non-zero. RayMol declares `target_rebuild_rmsd` instead;
+  reusing the key would brand every correct design a defect.
+* **Sizing is in TOKENS.** `RFD3SizeGuard` is denominated in atoms. One residue
+  is one token here, so feeding an atom count to a quadratic would refuse
+  essentially everything.
+* **The cache-limit owner name must be its own.** `MLXRuntime` keeps the most
+  conservative ceiling any owner asks for; registering as `"RFD3"` overwrites
+  that requirement rather than being arbitrated against it, and both runtimes
+  can be resident in one session. RayMol asks for 512 MB against rfd3's 256 MB,
+  because this port sets no MLX limits of its own — so the ceiling spans the
+  whole trajectory rather than just a pack load.
+* **There is no live view.** `RFD4Design`'s step hook reports `(step, trunk
+  passes)` and no coordinates. Streaming one needs a new hook HERE, not a flag
+  there.
+
+### What the host API did not provide, and had to be added
+
+`RFD4Design`'s `Stats` reports `interfaceMinA` and `hotspotMinA` as optionals,
+so RayMol has no `isFinite ? x : 0` to undo. The one thing a host still owns is
+POLICY: what fraction of a machine a single design may claim. `RFD4Budget` does
+the arithmetic, `RFD4SizeGuard` decides the fraction, and nothing copies the
+coefficients.
+
+### Verified end to end
+
+The bundle was resolved through RayMol's own `WeightCache.ensure` from the
+published URL — download, sha256, size and flat-member check — in 14.3 s, and
+the extracted pack then produced a real design through this repo's CLI: 233
+tokens, CA-CA 3.83 A (ideal 3.80), Rg 14.0, interface 6.44 A, 64 contacts,
+89 s. So the bytes GitHub serves are a pack that designs.
 
 ### The size guard needs these numbers
 
